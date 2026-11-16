@@ -1,0 +1,25 @@
+# Virtual Environments
+.venv/
+env/
+venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data and Logs
+data/raw/*.csv
+data/parquet/
+reports/*.csv
+*.log
+
+# Runtime output & throwaway audit scripts. The OHLC parity baseline is the one
+# exception: the ticket cites it as evidence, so it is force-added by hand.
+logs/
