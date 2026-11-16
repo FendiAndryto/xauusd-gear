@@ -13,7 +13,7 @@
 | ID Epic | Nama Epic & Deskripsi | Target Tiket | Status Pelaksanaan | Catatan Validasi |
 | :---: | :--- | :---: | :---: | :--- |
 | **EPIC 1** | **Data Pipeline Historis (M5, M15, H1, M1) & Ingestion** | `T-PAR-01`, `T-PAR-02` | **SELESAI (100%) + TER-AUDIT** | 179 file parquet, 528.207 bar; cakupan nyata H1 2018-07 / M15 2022-11 / M5 2025-06 / M1 2026-01. **Bukan 10 tahun penuh.** |
-| **EPIC 2** | **Dead Code Elimination (Pembersihan Sinyal Live)** | `T-PAR-03`, `T-PAR-04`, `T-PAR-05` | **SELESAI (100%)** | 5 modul backend + 5 JS + 2 test dihapus; `app.py` 6 route; 100 pytest / 48 node / 56 UI check hijau |
+| **EPIC 2** | **Dead Code Elimination (Pembersihan Sinyal Live)** | `T-PAR-03`, `T-PAR-04`, `T-PAR-05` | **SELESAI (100%)** | 5 modul backend + 5 JS + 2 test dihapus; `app.py` 6 route; 100 pytest / 34 node / 56 UI check hijau saat itu |
 | **EPIC 3** | **Backend Replay API & Katalog Dinamis** | `T-PAR-06`, `T-PAR-07` | **SELESAI (100%)** | Endpoint `/coverage` + dispatch `period_mode`; payload `{meta,candles}` tanpa pembulatan; 19 test baru. H1 rapat baru sejak **2021-07-01** (2018-07→2021-06 = 36 bulan sparse) |
 | **EPIC 4** | **Frontend TradingView-Grade Interaction & Fullscreen** | `T-PAR-08`, `T-PAR-09`, `T-PAR-10` | **SELESAI (100%)** | 4 file frontend ditulis ulang; selector digenerate dari coverage, follow/zoom/pan & fullscreen terverifikasi browser. HUD + scrubber + 8 speed pill |
 | **EPIC 5** | **Verifikasi E2E & Smoke Testing Otomatis** | `T-PAR-11` | **SELESAI (100%)** | `scripts/verify_pure_replay.py` → **67/67 check, exit 0** (API+gzip, selector, transport, follow, fullscreen, M5/M15/H1). Suite lama 56 cek sudah tidak valid |
@@ -272,4 +272,5 @@ static/js/stream.js, chart.js, overlay.js, setups.js, evaluation.js
   * **Bukti eksekusi:**
     - `scripts/verify_pure_replay.py` — **67 check, exit 0**, mencakup kontrak API (termasuk gzip >70%), DOM selector, transport, follow/zoom/pan, M5+M15+H1 playback, fullscreen in/out, dan nol error console.
     - Suite lama `scripts/verify_replay_ui.py` (56 cek) mengunci UI benchmark yang sudah dibuang, sehingga tidak lagi valid. File itu **sudah dihapus** (2026-11-16) setelah konfirmasi user; salinan identik (SHA-256 cocok) tersimpan di `_legacy_epic4/scripts/verify_replay_ui.py` bila kelak ingin dirujuk.
-    - Bukti tambahan: `pytest` 119 lulus, `node --test` 48 lulus, audit parquet 100% valid.
+    - Bukti tambahan: `pytest` 119 lulus, `node --test tests/js/replay_engine.test.js` 34 lulus, audit parquet 100% valid.
+  * **Pembersihan lanjutan:** `src/assistant/static/js/replay_markers.js` (5,8 KB) dan `tests/js/replay_markers.test.js` (14 test) **dihapus** setelah Epic 4 karena nol referensi — marker trade ikut hilang bersama trade drawer. Node test turun 48 → 34. Backup: `_legacy_epic4/js/` dan `_legacy_epic4/tests/js/`.

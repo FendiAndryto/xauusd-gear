@@ -397,7 +397,7 @@ Toolbar diatur menjadi 4 kelompok kontrol ergonomis:
    | Perintah | Cakupan | Hasil |
    | :--- | :--- | :--- |
    | `.venv\Scripts\python.exe -m pytest -q` | backend + katalog + paritas benchmark | **119 passed** |
-   | `node --test tests/js/replay_engine.test.js tests/js/replay_markers.test.js` | controller replay & marker | **48 pass** |
+   | `node --test tests/js/replay_engine.test.js` | controller replay (clock, step, seek, cache) | **34 pass** |
    | `.venv\Scripts\python.exe scripts\verify_pure_replay.py` | E2E browser (API, selector, transport, follow/zoom/pan, fullscreen) | **67 checks, exit 0** |
    | `.venv\Scripts\python.exe scripts\verify_parquet_cache.py` | integritas 179 file parquet | **528.207 bar, 100% valid** |
    | `.venv\Scripts\python.exe scripts\repair_bar_cache_schema.py --check` | drift skema 9 kolom | **0 drift** |
