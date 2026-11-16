@@ -232,6 +232,17 @@ Mengembalikan katalog ketersediaan data berdasarkan hasil pindai metadata parque
 > (2026-11, ingest belum selesai). Bulan sparse **tidak diblokir** — user tetap
 > boleh memilihnya — tetapi payload menyertakan peringatan (§5.2).
 >
+> **Dibuktikan ke broker, bukan diasumsikan (2026-11-16).**
+> `scripts/probe_h1_history.py` meminta H1 dan D1 langsung ke terminal MT5 untuk
+> sepuluh bulan sampel pada simbol `XAUUSDm`. Hasilnya: 2018-07 s/d 2021-06
+> mengembalikan jumlah bar H1 **persis sama** dengan D1 (28/28, 26/26, 26/26,
+> 26/26, 27/27 — rasio 1,0), sedangkan 2021-07 dan sesudahnya memberi rasio
+> 17,4–18,9 (471–530 bar H1 vs 27–28 D1). Artinya server broker memang hanya
+> menyimpan **lilin harian** sebelum 2021-07 dan mengirimkannya untuk permintaan
+> H1; cache sudah merupakan maksimum yang jujur. Tidak ada yang bisa diunduh
+> ulang, dan peringatan sparse adalah jawaban yang benar. Probe yang sama
+> menunjukkan M15 intraday baru mulai sekitar **2022-08**.
+>
 > Angka lama — H1/M15 mulai 2017-01-01 dengan 62.400 / 249.600 bar, M5 mulai
 > 2019-01-01 dengan 748.800 bar — adalah karangan dan sudah dicabut.
 
