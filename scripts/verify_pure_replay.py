@@ -571,6 +571,175 @@ def main() -> int:
             "zoom keeps the right edge pinned to the active bar", zoom["atEdge"], zoom
         )
 
+        # Real mouse-wheel zoom while playing must preserve follow and stay glued to edge.
+        chart_box = page.js(
+            "(() => {"
+            " var el = document.getElementById('replay-chart');"
+            " var rect = el.getBoundingClientRect();"
+            " return {"
+            "   x: Math.round(rect.left + rect.width / 2),"
+            "   y: Math.round(rect.top + rect.height / 2)"
+            " };"
+            "})()"
+        )
+        for dy in (-120, -120, 120):
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseWheel",
+                    "x": chart_box["x"],
+                    "y": chart_box["y"],
+                    "deltaX": 0,
+                    "deltaY": dy,
+                },
+            )
+            time.sleep(0.05)
+        time.sleep(0.1)
+
+        wheel_zoom = page.js(
+            "(() => {"
+            " var c = SmcDebug.replay.getChart();"
+            " var ts = c.timeScale();"
+            " var r = ts.getVisibleLogicalRange();"
+            " var pinned = c.getWatermark() + 6;"
+            " return {"
+            "   following: c.isFollowing(),"
+            "   atEdge: r ? Math.abs(r.to - pinned) < 1.0 : false,"
+            "   watermark: c.getWatermark(),"
+            "   to: r ? r.to : null"
+            " };"
+            "})()"
+        )
+        check(
+            "wheel zoom while playing preserves follow mode",
+            wheel_zoom["following"] is True,
+            wheel_zoom,
+        )
+        check(
+            "wheel zoom leaves right edge pinned to active bar",
+            wheel_zoom["atEdge"] is True,
+            wheel_zoom,
+        )
+
+        # Gesture C: predominantly vertical drag with incidental horizontal drift must preserve follow
+        cx, cy = chart_box["x"], chart_box["y"]
+        page.cdp.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": cx,
+                "y": cy,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+        )
+        for i in range(1, 11):
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseMoved",
+                    "x": cx + 30 * i // 10,
+                    "y": cy - 120 * i // 10,
+                    "button": "left",
+                    "buttons": 1,
+                },
+            )
+            time.sleep(0.02)
+        page.cdp.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": cx + 30,
+                "y": cy - 120,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            },
+        )
+        time.sleep(0.1)
+
+        vert_drag = page.js(
+            "(() => {"
+            " var c = SmcDebug.replay.getChart();"
+            " var ts = c.timeScale();"
+            " var r = ts.getVisibleLogicalRange();"
+            " var pinned = c.getWatermark() + 6;"
+            " return {"
+            "   following: c.isFollowing(),"
+            "   atEdge: r ? Math.abs(r.to - pinned) < 1.0 : false,"
+            "   watermark: c.getWatermark(),"
+            "   to: r ? r.to : null"
+            " };"
+            "})()"
+        )
+        check(
+            "vertical drag with incidental drift preserves follow mode",
+            vert_drag["following"] is True,
+            vert_drag,
+        )
+        check(
+            "vertical drag leaves right edge pinned to active bar",
+            vert_drag["atEdge"] is True,
+            vert_drag,
+        )
+
+        # Genuinely horizontal drag to past must still break follow mode
+        page.cdp.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": cx,
+                "y": cy,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+        )
+        for i in range(1, 11):
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseMoved",
+                    "x": cx + 120 * i // 10,
+                    "y": cy,
+                    "button": "left",
+                    "buttons": 1,
+                },
+            )
+            time.sleep(0.02)
+        page.cdp.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": cx + 120,
+                "y": cy,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            },
+        )
+        time.sleep(0.1)
+
+        horiz_drag = page.js(
+            "(() => {"
+            " var c = SmcDebug.replay.getChart();"
+            " return {"
+            "   following: c.isFollowing(),"
+            "   buttonHidden: document.getElementById('replay-btn-follow').classList.contains('hidden')"
+            " };"
+            "})()"
+        )
+        check(
+            "horizontal drag to past breaks follow mode",
+            horiz_drag["following"] is False and horiz_drag["buttonHidden"] is False,
+            horiz_drag,
+        )
+
+        # Restore follow mode for subsequent checks
+        page.js("document.getElementById('replay-btn-follow').click()")
+        time.sleep(0.1)
+
         # Playing pan: dragging backward while playing must scroll along once the
         # active candle reaches the right edge, rather than letting it walk off-screen.
         pan_check = page.js(

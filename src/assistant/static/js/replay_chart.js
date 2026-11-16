@@ -104,7 +104,51 @@
     var isFollowing = true;
     var isProgrammaticScroll = false;
     var lastVisibleSpan = DEFAULT_VISIBLE_BARS;
+    var lastBarSpacing = null;
     var followChangeCallbacks = [];
+
+    var dragOrigin = null;
+    var isPriceScaleDrag = false;
+    var latchedAxis = null;
+
+    if (container && container.addEventListener) {
+      container.addEventListener('pointerdown', function (e) {
+        if (e.button != null && e.button !== 0) return;
+        var rect = container.getBoundingClientRect();
+        var tsWidth = chart.timeScale().width();
+        dragOrigin = { x: e.clientX, y: e.clientY };
+        isPriceScaleDrag = e.clientX >= rect.left + tsWidth;
+        latchedAxis = null;
+      });
+
+      var onPointerMove = function (e) {
+        if (!dragOrigin) return;
+        if (latchedAxis !== null) return;
+        var dx = e.clientX - dragOrigin.x;
+        var dy = e.clientY - dragOrigin.y;
+        if (Math.abs(dx) >= 4 || Math.abs(dy) >= 4) {
+          latchedAxis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical';
+        }
+      };
+
+      var onPointerEnd = function () {
+        var wasVertical = latchedAxis === 'vertical';
+        var wasPriceScale = isPriceScaleDrag;
+        dragOrigin = null;
+        isPriceScaleDrag = false;
+        latchedAxis = null;
+
+        if ((wasVertical || wasPriceScale) && isFollowing && watermark >= 0) {
+          keepViewportAtEdge();
+        }
+      };
+
+      if (typeof window !== 'undefined' && window.addEventListener) {
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerEnd);
+        window.addEventListener('pointercancel', onPointerEnd);
+      }
+    }
 
     function emitFollowChange(following) {
       for (var i = 0; i < followChangeCallbacks.length; i += 1) {
@@ -146,16 +190,37 @@
       if (isProgrammaticScroll) return;
 
       var currentSpan = newRange.to - newRange.from;
-      var spanDelta = Math.abs(currentSpan - lastVisibleSpan);
+      var tsOptions = chart.timeScale().options();
+      var curBs = tsOptions ? tsOptions.barSpacing : null;
+      var isZoom = false;
+      if (typeof curBs === 'number' && typeof lastBarSpacing === 'number') {
+        var eps = Math.max(1e-6, Math.abs(lastBarSpacing) * 1e-6);
+        if (Math.abs(curBs - lastBarSpacing) > eps) {
+          isZoom = true;
+        }
+      }
+      if (typeof curBs === 'number') {
+        lastBarSpacing = curBs;
+      }
 
-      if (spanDelta > 0.8) {
-        // Zoom action: bar count / barSpacing changed, preserve follow state
+      if (isZoom) {
         lastVisibleSpan = currentSpan;
+        if (isFollowing && watermark >= 0) {
+          keepViewportAtEdge();
+        }
         return;
       }
 
       // Pan action: span is virtually constant
       lastVisibleSpan = currentSpan;
+
+      var isVerticalOrScaleDrag = (latchedAxis === 'vertical') || isPriceScaleDrag;
+      if (isVerticalOrScaleDrag) {
+        if (isFollowing && watermark >= 0) {
+          keepViewportAtEdge();
+        }
+        return;
+      }
 
       if (watermark >= 0) {
         var expectedTo = watermark + RIGHT_OFFSET;

@@ -393,6 +393,22 @@ Toolbar diatur menjadi 4 kelompok kontrol ergonomis:
 | **`PAUSED`** | **Aktif Bebas:** Memperbesar / memperkecil struktur teknikal | **Bebas 100%:** User dapat menggeser sejauh apa pun ke riwayat masa lalu layaknya TradingView | Tidak ada pergerakan paksa dari sistem |
 | **`TEKAN PLAY`** | Tetap mempertahankan skala zoom terakhir | Mengembalikan fokus ke lilin aktif | Viewport secara mulus mengunci (*snap*) kembali ke ujung kanan lilin aktif |
 
+> **Aturan sumbu dominan, ditambahkan setelah bug "drag sumbu harga memutus follow" (2026-11-16).**
+> Zoom tidak lagi ditebak dari selisih jumlah bar (ambang kasar 0,8 bar membuat zoom roda
+> mouse yang datang bertahap terbaca sebagai pan). Klasifikasi sekarang: **`barSpacing`
+> berubah → zoom** (toleransi relatif 1e-6), dan saat follow aktif tepi kanan langsung
+> di-re-pin ke `watermark + 6` supaya lilin tidak tergelincir selama zoom.
+>
+> Untuk drag, arah gesture ditentukan dari **sumbu dominan pointer**, bukan dari besar
+> pergeseran waktu: `pointerdown` mencatat titik awal dan apakah tekanannya jatuh di strip
+> sumbu harga; `pointermove` mengunci sumbu setelah gerak > 4 px (`|dx| ≥ |dy|` →
+> horizontal). Cabang pan hanya dievaluasi untuk gesture horizontal — drag vertikal
+> (meregangkan harga) dan drag di strip sumbu harga **tidak pernah** mengubah status
+> follow, dan tepi kanan di-re-pin selama drag berlangsung. Bukti: drag vertikal dengan
+> drift horizontal 25 px (≈3,6 bar) dulu mematikan follow (`to` 7,71 → 5,84), sekarang
+> tetap `following=true` dengan `to` menempel di `watermark + 6`. Pan horizontal asli
+> tetap memutus follow dan memunculkan tombol `⬇ Ikuti Lilin`.
+
 ### 6.3. Mode Layar Penuh (Native Fullscreen)
 * Dijalankan pada kontainer utama chart replay via `element.requestFullscreen()`. Bila browser menolak (tanpa user activation), jatuh ke fallback class `.is-fullscreen` sehingga layout tetap penuh.
 * **Heads-Up Display (HUD):**
@@ -420,7 +436,7 @@ Toolbar diatur menjadi 4 kelompok kontrol ergonomis:
    | :--- | :--- | :--- |
    | `.venv\Scripts\python.exe -m pytest -q` | backend + katalog + paritas benchmark | **119 passed** |
    | `node --test tests/js/replay_engine.test.js` | controller replay (clock, step, seek, cache) | **34 pass** |
-   | `.venv\Scripts\python.exe scripts\verify_pure_replay.py` | E2E browser (API, selector, transport, follow/zoom/pan, fullscreen) | **68 checks, exit 0** |
+   | `.venv\Scripts\python.exe scripts\verify_pure_replay.py` | E2E browser (API, selector, transport, follow/zoom/pan, fullscreen) | **73 checks, exit 0** |
    | `.venv\Scripts\python.exe scripts\verify_parquet_cache.py` | integritas 179 file parquet | **528.207 bar, 100% valid** |
    | `.venv\Scripts\python.exe scripts\repair_bar_cache_schema.py --check` | drift skema 9 kolom | **0 drift** |
    > `scripts/verify_replay_ui.py` (56 cek) sudah **dihapus** karena menguji picker benchmark, R:R preset, trade drawer, dan equity HUD yang dihilangkan di Epic 4. Salinannya diarsipkan di `_legacy_epic4/scripts/`. Gerbang UI yang berlaku sekarang hanya `verify_pure_replay.py`.
