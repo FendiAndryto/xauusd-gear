@@ -215,6 +215,17 @@
       }
 
       var advanced = target !== watermark;
+
+      if (!isFollowing && advanced && target > watermark) {
+        var range = chart.timeScale().getVisibleLogicalRange();
+        if (range && watermark >= 0 && watermark >= range.from && watermark <= range.to) {
+          if (target >= range.to - 0.5) {
+            setFollow(true);
+            cfg.follow = true;
+          }
+        }
+      }
+
       watermark = target;
 
       if (advanced && isFollowing && cfg.follow !== false) {

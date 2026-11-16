@@ -571,6 +571,59 @@ def main() -> int:
             "zoom keeps the right edge pinned to the active bar", zoom["atEdge"], zoom
         )
 
+        # Playing pan: dragging backward while playing must scroll along once the
+        # active candle reaches the right edge, rather than letting it walk off-screen.
+        pan_check = page.js(
+            "new Promise(function(resolve){"
+            " var c = SmcDebug.replay.getChart();"
+            " var ts = c.timeScale();"
+            " var r = ts.getVisibleLogicalRange();"
+            " var w = c.getWatermark();"
+            " var span = r.to - r.from;"
+            " var targetTo = w + 1;"
+            " ts.setVisibleLogicalRange({from: targetTo - span, to: targetTo});"
+            " var parkedTo = targetTo;"
+            " var timer = setTimeout(function(){"
+            "   clearInterval(interval);"
+            "   var now = ts.getVisibleLogicalRange();"
+            "   var cur = c.getWatermark();"
+            "   resolve({"
+            "     watermark: cur,"
+            "     from: now ? now.from : 0,"
+            "     to: now ? now.to : 0,"
+            "     inView: now ? (cur >= now.from && cur <= now.to) : false,"
+            "     following: c.isFollowing(),"
+            "     state: SmcDebug.replay.snapshot().state,"
+            "     timedOut: true"
+            "   });"
+            " }, 5000);"
+            " var interval = setInterval(function(){"
+            "   var cur = c.getWatermark();"
+            "   if (cur >= parkedTo + 1) {"
+            "     clearInterval(interval);"
+            "     clearTimeout(timer);"
+            "     var now = ts.getVisibleLogicalRange();"
+            "     resolve({"
+            "       watermark: cur,"
+            "       from: now ? now.from : 0,"
+            "       to: now ? now.to : 0,"
+            "       inView: now ? (cur >= now.from && cur <= now.to) : false,"
+            "       following: c.isFollowing(),"
+            "       state: SmcDebug.replay.snapshot().state,"
+            "       timedOut: false"
+            "     });"
+            "   }"
+            " }, 50);"
+            "})"
+        )
+        check(
+            "candle stays in view and scrolls along when playback reaches edge",
+            pan_check["inView"] is True
+            and pan_check["state"] == "PLAYING"
+            and not pan_check.get("timedOut"),
+            pan_check,
+        )
+
         page.js("document.getElementById('replay-play').click()")
         paused = page.snapshot()
         check("pause freezes the replay", paused["state"] == "PAUSED", paused["state"])
@@ -586,12 +639,14 @@ def main() -> int:
             " setTimeout(function(){"
             "   var r = ts.getVisibleLogicalRange();"
             "   ts.setVisibleLogicalRange({from: r.from - 600, to: r.to - 600});"
-            "   var first = ts.getVisibleLogicalRange();"
             "   setTimeout(function(){"
-            "     var second = ts.getVisibleLogicalRange();"
-            "     resolve({drift: Math.abs(second.to - first.to),"
-            "       following: SmcDebug.replay.isFollowing()});"
-            "   }, 500);"
+            "     var first = ts.getVisibleLogicalRange();"
+            "     setTimeout(function(){"
+            "       var second = ts.getVisibleLogicalRange();"
+            "       resolve({drift: Math.abs(second.to - first.to),"
+            "         following: SmcDebug.replay.isFollowing()});"
+            "     }, 500);"
+            "   }, 50);"
             " }, 150);"
             "})"
         )

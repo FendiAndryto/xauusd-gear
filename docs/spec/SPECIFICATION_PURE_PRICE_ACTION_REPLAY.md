@@ -379,6 +379,17 @@ Toolbar diatur menjadi 4 kelompok kontrol ergonomis:
 | Status Replay | Perilaku Zoom (Roda Mouse / Pinch) | Perilaku Pan (Drag Kiri / Kanan) | Perilaku Viewport |
 | :--- | :--- | :--- | :--- |
 | **`PLAYING`** | **Aktif Bebas:** Mengubah `barSpacing` tanpa memutus auto-follow | Jika user menggeser chart ke masa lalu, auto-follow berhenti sejenak dan muncul tombol `⬇ Ikuti Lilin` | Ujung kanan chart selalu menempel mengikuti lilin baru yang terbentuk |
+
+> **Aturan tepi (edge catch-up), ditambahkan setelah bug "lilin kepotong" (2026-11-16).**
+> Auto-follow tidak boleh mati permanen hanya karena satu drag. Saat `PLAYING` dan
+> auto-follow sedang lepas, setiap kali lilin aktif maju, chart mengecek apakah lilin
+> **sebelumnya** masih berada di dalam jendela yang terlihat (`from ≤ watermark ≤ to`).
+> Bila ya, dan lilin baru sudah menyentuh tepi kanan (`target ≥ to − 0,5`), auto-follow
+> menyala kembali dan viewport ikut bergeser — lilin yang sedang ditonton tidak pernah
+> jalan keluar layar. Bila user sengaja memarkir jendela ke masa lalu sehingga lilin
+> aktif sudah di luar jendela, follow **tetap** lepas dan viewport tidak digeser paksa;
+> tombol `⬇ Ikuti Lilin` yang mengembalikannya. Drag kecil 1–4 bar juga tidak langsung
+> di-snap balik — follow baru menyala saat lilin benar-benar menyentuh tepi.
 | **`PAUSED`** | **Aktif Bebas:** Memperbesar / memperkecil struktur teknikal | **Bebas 100%:** User dapat menggeser sejauh apa pun ke riwayat masa lalu layaknya TradingView | Tidak ada pergerakan paksa dari sistem |
 | **`TEKAN PLAY`** | Tetap mempertahankan skala zoom terakhir | Mengembalikan fokus ke lilin aktif | Viewport secara mulus mengunci (*snap*) kembali ke ujung kanan lilin aktif |
 
@@ -409,7 +420,7 @@ Toolbar diatur menjadi 4 kelompok kontrol ergonomis:
    | :--- | :--- | :--- |
    | `.venv\Scripts\python.exe -m pytest -q` | backend + katalog + paritas benchmark | **119 passed** |
    | `node --test tests/js/replay_engine.test.js` | controller replay (clock, step, seek, cache) | **34 pass** |
-   | `.venv\Scripts\python.exe scripts\verify_pure_replay.py` | E2E browser (API, selector, transport, follow/zoom/pan, fullscreen) | **67 checks, exit 0** |
+   | `.venv\Scripts\python.exe scripts\verify_pure_replay.py` | E2E browser (API, selector, transport, follow/zoom/pan, fullscreen) | **68 checks, exit 0** |
    | `.venv\Scripts\python.exe scripts\verify_parquet_cache.py` | integritas 179 file parquet | **528.207 bar, 100% valid** |
    | `.venv\Scripts\python.exe scripts\repair_bar_cache_schema.py --check` | drift skema 9 kolom | **0 drift** |
    > `scripts/verify_replay_ui.py` (56 cek) sudah **dihapus** karena menguji picker benchmark, R:R preset, trade drawer, dan equity HUD yang dihilangkan di Epic 4. Salinannya diarsipkan di `_legacy_epic4/scripts/`. Gerbang UI yang berlaku sekarang hanya `verify_pure_replay.py`.
