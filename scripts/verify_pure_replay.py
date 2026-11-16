@@ -576,18 +576,23 @@ def main() -> int:
         check("pause freezes the replay", paused["state"] == "PAUSED", paused["state"])
 
         # Paused means *no* forced movement: park the viewport in the past and make
-        # sure nothing drags it back to the edge on its own.
+        # sure nothing drags it back to the edge on its own. The 150 ms settle
+        # matters: the pause click lands while the previous zoom check may still
+        # have one follow tick queued, and that tick would otherwise be measured
+        # as drift.
         parked = page.js(
             "new Promise(function(resolve){"
             " var ts = SmcDebug.replay.getChart().timeScale();"
-            " var r = ts.getVisibleLogicalRange();"
-            " ts.setVisibleLogicalRange({from: r.from - 600, to: r.to - 600});"
-            " var first = ts.getVisibleLogicalRange();"
             " setTimeout(function(){"
-            "   var second = ts.getVisibleLogicalRange();"
-            "   resolve({drift: Math.abs(second.to - first.to),"
-            "     following: SmcDebug.replay.isFollowing()});"
-            " }, 500);"
+            "   var r = ts.getVisibleLogicalRange();"
+            "   ts.setVisibleLogicalRange({from: r.from - 600, to: r.to - 600});"
+            "   var first = ts.getVisibleLogicalRange();"
+            "   setTimeout(function(){"
+            "     var second = ts.getVisibleLogicalRange();"
+            "     resolve({drift: Math.abs(second.to - first.to),"
+            "       following: SmcDebug.replay.isFollowing()});"
+            "   }, 500);"
+            " }, 150);"
             "})"
         )
         check(
