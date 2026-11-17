@@ -337,7 +337,51 @@
       },
       getWatermark: function () { return watermark; },
       getVisibleBars: function () { return watermark < 0 ? 0 : watermark + 1; },
-      timeScale: function () { return chart.timeScale(); }
+      timeScale: function () { return chart.timeScale(); },
+      getChart: function () { return chart; },
+      getSeries: function () { return series; },
+      timeToCoordinate: function (time) {
+        if (time == null || isNaN(time) || time <= 0) return null;
+        try {
+          return chart.timeScale().timeToCoordinate(time);
+        } catch (e) {
+          return null;
+        }
+      },
+      coordinateToTime: function (coordinate) {
+        if (coordinate == null || isNaN(coordinate)) return null;
+        try {
+          return chart.timeScale().coordinateToTime(coordinate);
+        } catch (e) {
+          return null;
+        }
+      },
+      priceToCoordinate: function (price) {
+        if (price == null || isNaN(price)) return null;
+        try {
+          return series.priceToCoordinate(price);
+        } catch (e) {
+          return null;
+        }
+      },
+      coordinateToPrice: function (coordinate) {
+        if (coordinate == null || isNaN(coordinate)) return null;
+        try {
+          return series.coordinateToPrice(coordinate);
+        } catch (e) {
+          return null;
+        }
+      },
+      subscribeRange: function (fn) {
+        if (typeof fn === 'function') {
+          chart.timeScale().subscribeVisibleLogicalRangeChange(fn);
+        }
+      },
+      subscribeClick: function (fn) {
+        if (typeof fn === 'function') {
+          chart.subscribeClick(fn);
+        }
+      }
     };
   }
 

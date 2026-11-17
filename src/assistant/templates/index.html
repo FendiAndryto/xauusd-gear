@@ -8,7 +8,7 @@
   <title>XAUUSD Replay Terminal</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/css/dashboard.css?v=23">
-  <link rel="stylesheet" href="/static/css/replay.css?v=23">
+  <link rel="stylesheet" href="/static/css/replay.css?v=27">
 </head>
 <body>
   <header class="app-header">
@@ -165,7 +165,40 @@
         <!-- Chart Container Area (T-PAR-09 & T-PAR-10) -->
         <div class="replay-body">
           <div id="replay-chart-wrap" class="replay-chart-wrap">
+            <!-- Vertical Tools Dock (T-SIM-03) -->
+            <nav id="replay-dock" class="replay-dock" aria-label="Toolbar Alat Gambar & Simulasi">
+              <div class="replay-dock-group" role="toolbar" aria-label="Peralatan Gambar">
+                <button type="button" class="replay-dock-btn is-active" id="tool-cursor" data-tool="cursor" data-tooltip="Kursor / Pilih (V)" aria-label="Kursor / Pilih (V)" aria-pressed="true">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7 18 3-7 7-3L3 3z"/></svg>
+                </button>
+                <button type="button" class="replay-dock-btn" id="tool-hline" data-tool="hline" data-tooltip="Horizontal Line (Alt+H)" aria-label="Horizontal Line (Alt+H)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>
+                </button>
+                <button type="button" class="replay-dock-btn" id="tool-rect" data-tool="rect" data-tooltip="Kotak Zona / Rectangle (R)" aria-label="Kotak Zona / Rectangle (R)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg>
+                </button>
+                <button type="button" class="replay-dock-btn" id="tool-trendline" data-tool="trendline" data-tooltip="Trendline (T)" aria-label="Trendline (T)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="19" x2="20" y2="5"/><circle cx="4" cy="19" r="2" fill="currentColor"/><circle cx="20" cy="5" r="2" fill="currentColor"/></svg>
+                </button>
+                <button type="button" class="replay-dock-btn" id="tool-ruler" data-tool="ruler" data-tooltip="Penggaris / Ukur (M)" aria-label="Penggaris / Ukur (M)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 17l15-15 5 5-15 15-5-5z"/><path d="M6 9l2 2"/><path d="M9 6l2 2"/><path d="M12 3l2 2"/></svg>
+                </button>
+                <div class="replay-dock-divider" aria-hidden="true"></div>
+                <button type="button" class="replay-dock-btn replay-dock-btn-sim" id="tool-long" data-tool="long_pos" data-tooltip="Posisi Long / BUY (L)" aria-label="Posisi Long / BUY (L)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                </button>
+                <button type="button" class="replay-dock-btn replay-dock-btn-sim" id="tool-short" data-tool="short_pos" data-tooltip="Posisi Short / SELL (S)" aria-label="Posisi Short / SELL (S)" aria-pressed="false">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+                </button>
+                <div class="replay-dock-divider" aria-hidden="true"></div>
+                <button type="button" class="replay-dock-btn replay-dock-btn-danger" id="tool-clear" data-action="clear" data-tooltip="Hapus Semua Gambar (Del)" aria-label="Hapus Semua Gambar (Del)">
+                  <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>
+                </button>
+              </div>
+            </nav>
+
             <div id="replay-chart" class="replay-chart">
+              <canvas id="replay-drawing-canvas" class="replay-drawing-canvas" aria-hidden="true"></canvas>
               <p class="chart-empty" id="replay-chart-empty">Memuat data replay…</p>
             </div>
 
@@ -174,43 +207,50 @@
               ⬇ Ikuti Lilin Terbaru
             </button>
 
-            <!-- Floating HUD (Melayang kanan atas) -->
+            <!-- Floating HUD (Pojok Kiri Atas - Top-Left) -->
             <div id="replay-hud" class="replay-hud-floating" aria-label="Live replay HUD">
               <div class="replay-hud-header">
-                <span id="replay-hud-status" class="replay-hud-status">STOPPED</span>
-                <span id="replay-hud-progress" class="replay-hud-progress">0.0%</span>
+                <div class="replay-hud-meta">
+                  <span id="replay-hud-status" class="replay-hud-status">STOPPED</span>
+                  <span id="replay-hud-progress" class="replay-hud-progress">0.0%</span>
+                </div>
+                <button type="button" id="replay-hud-toggle" class="replay-hud-btn-toggle" title="Ciutkan / Bentangkan HUD (H)" aria-label="Ciutkan HUD">—</button>
               </div>
-              <div class="replay-hud-time">
-                <div class="replay-hud-time-row">
-                  <span class="replay-hud-time-label">UTC:</span>
-                  <span id="replay-hud-time-utc" class="replay-hud-time-val">—</span>
+              <div class="replay-hud-body">
+                <div class="replay-hud-time">
+                  <div class="replay-hud-time-row">
+                    <span class="replay-hud-time-label">UTC:</span>
+                    <span id="replay-hud-time-utc" class="replay-hud-time-val">—</span>
+                  </div>
+                  <div class="replay-hud-time-row">
+                    <span class="replay-hud-time-label">Lokal:</span>
+                    <span id="replay-hud-time-local" class="replay-hud-time-val">—</span>
+                  </div>
                 </div>
-                <div class="replay-hud-time-row">
-                  <span class="replay-hud-time-label">Lokal:</span>
-                  <span id="replay-hud-time-local" class="replay-hud-time-val">—</span>
+                <div class="replay-hud-divider" aria-hidden="true"></div>
+                <div class="replay-hud-ohlc">
+                  <div class="replay-hud-ohlc-item">
+                    <span class="replay-hud-label">O</span>
+                    <span id="replay-hud-open" class="replay-hud-val">—</span>
+                  </div>
+                  <div class="replay-hud-ohlc-item">
+                    <span class="replay-hud-label">H</span>
+                    <span id="replay-hud-high" class="replay-hud-val">—</span>
+                  </div>
+                  <div class="replay-hud-ohlc-item">
+                    <span class="replay-hud-label">L</span>
+                    <span id="replay-hud-low" class="replay-hud-val">—</span>
+                  </div>
+                  <div class="replay-hud-ohlc-item">
+                    <span class="replay-hud-label">C</span>
+                    <span id="replay-hud-close" class="replay-hud-val">—</span>
+                  </div>
                 </div>
-              </div>
-              <div class="replay-hud-ohlc">
-                <div class="replay-hud-ohlc-item">
-                  <span class="replay-hud-label">O</span>
-                  <span id="replay-hud-open" class="replay-hud-val">—</span>
+                <div class="replay-hud-divider" aria-hidden="true"></div>
+                <div class="replay-hud-range-row">
+                  <span class="replay-hud-label">Range:</span>
+                  <span id="replay-hud-range" class="replay-hud-val">—</span>
                 </div>
-                <div class="replay-hud-ohlc-item">
-                  <span class="replay-hud-label">H</span>
-                  <span id="replay-hud-high" class="replay-hud-val">—</span>
-                </div>
-                <div class="replay-hud-ohlc-item">
-                  <span class="replay-hud-label">L</span>
-                  <span id="replay-hud-low" class="replay-hud-val">—</span>
-                </div>
-                <div class="replay-hud-ohlc-item">
-                  <span class="replay-hud-label">C</span>
-                  <span id="replay-hud-close" class="replay-hud-val">—</span>
-                </div>
-              </div>
-              <div class="replay-hud-range-row">
-                <span class="replay-hud-label">Range:</span>
-                <span id="replay-hud-range" class="replay-hud-val">—</span>
               </div>
             </div>
           </div>
@@ -221,8 +261,13 @@
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <script src="/static/js/replay_engine.js?v=24"></script>
-  <script src="/static/js/replay_chart.js?v=24"></script>
-  <script src="/static/js/replay.js?v=24"></script>
+  <script src="/static/js/replay_chart.js?v=25"></script>
+  <script src="/static/js/replay_canvas.js?v=27"></script>
+  <script src="/static/js/replay_drawings.js?v=30"></script>
+  <script src="/static/js/replay_ledger.js?v=29"></script>
+  <script src="/static/js/replay_simulator.js?v=32"></script>
+  <script src="/static/js/replay_storage.js?v=28"></script>
+  <script src="/static/js/replay.js?v=29"></script>
   <script src="/static/js/app.js?v=24"></script>
 </body>
 </html>

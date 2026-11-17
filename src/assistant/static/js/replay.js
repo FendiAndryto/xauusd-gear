@@ -23,6 +23,10 @@
   var el = {};
   var controller = null;
   var chartApi = null;
+  var canvasApi = null;
+  var drawingsApi = null;
+  var simulatorApi = null;
+  var currentTool = 'cursor';
   var coverage = null;
   var currentPayload = null;
   var loading = false;
@@ -369,6 +373,25 @@
 
   // ------------------------------------------------------------- chart & HUD
 
+  function syncStorage() {
+    if (!global.SmcReplayStorage || !currentPayload) return;
+    var meta = currentPayload.meta || {};
+    var yr = meta.year || selectedYear;
+    var mo = meta.month || selectedMonth;
+    var sym = meta.symbol || 'XAUUSD';
+
+    if (drawingsApi) {
+      global.SmcReplayStorage.saveDrawings(sym, yr, mo, drawingsApi.getDrawings());
+    }
+    if (simulatorApi) {
+      global.SmcReplayStorage.savePositions(sym, yr, mo, simulatorApi.getPositions());
+      var ledger = simulatorApi.getLedger();
+      if (ledger) {
+        global.SmcReplayStorage.saveLedger(sym, yr, mo, ledger.getSummary());
+      }
+    }
+  }
+
   function ensureChart() {
     if (chartApi || !el.chartContainer) return chartApi;
     if (!global.SmcReplayChart) return null;
@@ -377,6 +400,65 @@
     if (!chartApi) {
       setStatus('Library chart gagal dimuat.', 'error');
       return null;
+    }
+
+    if (global.SmcReplayCanvas && el.canvas && !canvasApi) {
+      canvasApi = global.SmcReplayCanvas.init({
+        canvas: el.canvas,
+        chartApi: chartApi,
+        container: el.chartContainer,
+        activeTool: currentTool
+      });
+    }
+
+    if (global.SmcReplayDrawings && canvasApi && !drawingsApi) {
+      drawingsApi = global.SmcReplayDrawings.init({
+        canvasApi: canvasApi,
+        chartApi: chartApi,
+        getCandles: function () {
+          return (currentPayload && currentPayload.candles) || [];
+        },
+        onCommit: function (item) {
+          selectTool('cursor');
+          syncStorage();
+        },
+        onChange: function () {
+          syncStorage();
+        }
+      });
+    }
+
+    if (global.SmcReplaySimulator && canvasApi && !simulatorApi) {
+      simulatorApi = global.SmcReplaySimulator.init({
+        canvasApi: canvasApi,
+        chartApi: chartApi,
+        getCandles: function () {
+          return (currentPayload && currentPayload.candles) || [];
+        },
+        getCurrentBar: function () {
+          if (!controller) return null;
+          var snap = controller.snapshot();
+          if (!snap || !snap.candle) return null;
+          var bar = snap.candle;
+          if (bar.index != null) return bar;
+          return {
+            index: snap.index,
+            time: bar.time,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume
+          };
+        },
+        onCommit: function (item) {
+          selectTool('cursor');
+          syncStorage();
+        },
+        onChange: function () {
+          syncStorage();
+        }
+      });
     }
 
     // When chart follow state changes, update floating button visibility
@@ -406,6 +488,28 @@
       show(el.warningsBanner, true);
     } else {
       show(el.warningsBanner, false);
+    }
+
+    // Restore persisted state for this symbol/month BEFORE the controller
+    // publishes its first frame. Otherwise a month switch would evaluate the
+    // previous month's positions against the new month's first candle.
+    if (global.SmcReplayStorage) {
+      var meta = payload.meta || {};
+      var yr = meta.year || selectedYear;
+      var mo = meta.month || selectedMonth;
+      var sym = meta.symbol || 'XAUUSD';
+
+      if (drawingsApi && drawingsApi.setDrawings) {
+        var savedDrawings = global.SmcReplayStorage.loadDrawings(sym, yr, mo);
+        drawingsApi.setDrawings(savedDrawings || []);
+      }
+      if (simulatorApi && simulatorApi.setPositions) {
+        var savedPositions = global.SmcReplayStorage.loadPositions(sym, yr, mo);
+        simulatorApi.setPositions(savedPositions || []);
+      }
+      if (simulatorApi && simulatorApi.restoreLedger) {
+        simulatorApi.restoreLedger(global.SmcReplayStorage.loadLedger(sym, yr, mo));
+      }
     }
 
     controller.load(payload);
@@ -611,34 +715,164 @@
     }
   }
 
+  function onHudToggle() {
+    if (!el.hud) return;
+    var minimized = el.hud.classList.toggle('is-minimized');
+    if (el.hudToggle) {
+      el.hudToggle.textContent = minimized ? '+' : '—';
+      el.hudToggle.setAttribute('title', minimized ? 'Bentangkan HUD (H)' : 'Ciutkan HUD (H)');
+      el.hudToggle.setAttribute('aria-label', minimized ? 'Bentangkan HUD' : 'Ciutkan HUD');
+    }
+  }
+
+  function toggleHud() {
+    if (!el.hud) return;
+    el.hud.classList.toggle('is-hidden');
+  }
+
+  function selectTool(toolName) {
+    currentTool = toolName || 'cursor';
+    if (el.dock) {
+      var buttons = el.dock.querySelectorAll('[data-tool]');
+      for (var i = 0; i < buttons.length; i += 1) {
+        var isCurrent = buttons[i].getAttribute('data-tool') === currentTool;
+        buttons[i].classList.toggle('is-active', isCurrent);
+        buttons[i].setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+      }
+    }
+    if (canvasApi) {
+      canvasApi.setTool(currentTool);
+    }
+  }
+
+  function onClearDrawings() {
+    if (drawingsApi) {
+      drawingsApi.clearDrawings();
+    }
+    if (simulatorApi) {
+      simulatorApi.clearPositions();
+    }
+    if (canvasApi) {
+      canvasApi.requestRedraw();
+    }
+    syncStorage();
+  }
+
   function onKeyDown(event) {
     if (event.defaultPrevented) return;
-    if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (isTypingTarget(event.target)) return;
 
-    if (event.code === 'Space' || event.key === ' ') {
-      event.preventDefault();
-      onPlayToggle();
-      return;
+    // Alt + H -> Horizontal Line tool
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (event.key === 'h' || event.key === 'H') {
+        event.preventDefault();
+        selectTool('hline');
+        return;
+      }
     }
-    if (event.key === 'ArrowRight' || event.code === 'ArrowRight') {
-      event.preventDefault();
-      onStep(1);
-      return;
-    }
-    if (event.key === 'ArrowLeft' || event.code === 'ArrowLeft') {
-      event.preventDefault();
-      onStep(-1);
-      return;
-    }
-    if (event.key === 'f' || event.key === 'F') {
-      event.preventDefault();
-      toggleFullscreen();
+
+    if (!event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (event.code === 'Space' || event.key === ' ') {
+        event.preventDefault();
+        onPlayToggle();
+        return;
+      }
+      if (event.key === 'ArrowRight' || event.code === 'ArrowRight') {
+        event.preventDefault();
+        onStep(1);
+        return;
+      }
+      if (event.key === 'ArrowLeft' || event.code === 'ArrowLeft') {
+        event.preventDefault();
+        onStep(-1);
+        return;
+      }
+      if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+      if (event.key === 'h' || event.key === 'H') {
+        event.preventDefault();
+        toggleHud();
+        return;
+      }
+      if (event.key === 'c' || event.key === 'C') {
+        event.preventDefault();
+        if (simulatorApi) {
+          var snap = controller ? controller.snapshot() : null;
+          var candle = snap ? snap.candle : null;
+          simulatorApi.closePosition(candle);
+          syncStorage();
+        }
+        return;
+      }
+      if (event.key === 'v' || event.key === 'V') {
+        event.preventDefault();
+        if (simulatorApi && simulatorApi.getSelectedId()) {
+          simulatorApi.deselect();
+        }
+        if (drawingsApi && drawingsApi.getSelectedId()) {
+          drawingsApi.deselect();
+        }
+        selectTool('cursor');
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (simulatorApi && simulatorApi.getSelectedId()) {
+          simulatorApi.deselect();
+        }
+        if (drawingsApi && drawingsApi.getSelectedId()) {
+          drawingsApi.deselect();
+        }
+        selectTool('cursor');
+        return;
+      }
+      if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
+        selectTool('rect');
+        return;
+      }
+      if (event.key === 't' || event.key === 'T') {
+        event.preventDefault();
+        selectTool('trendline');
+        return;
+      }
+      if (event.key === 'm' || event.key === 'M') {
+        event.preventDefault();
+        selectTool('ruler');
+        return;
+      }
+      if (event.key === 'l' || event.key === 'L') {
+        event.preventDefault();
+        selectTool('long_pos');
+        return;
+      }
+      if (event.key === 's' || event.key === 'S') {
+        event.preventDefault();
+        selectTool('short_pos');
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        if (simulatorApi && simulatorApi.getSelectedId()) {
+          simulatorApi.deleteSelected();
+          syncStorage();
+        } else if (drawingsApi && drawingsApi.getSelectedId()) {
+          drawingsApi.deleteSelected();
+          syncStorage();
+        } else {
+          onClearDrawings();
+        }
+        return;
+      }
     }
   }
 
   function onResize() {
     if (chartApi) chartApi.resize();
+    if (canvasApi) canvasApi.resize();
   }
 
   // ------------------------------------------------------------- init
@@ -684,10 +918,13 @@
 
     // Chart & HUD
     el.chartWrap = $('replay-chart-wrap');
+    el.dock = $('replay-dock');
+    el.canvas = $('replay-drawing-canvas');
     el.chartContainer = $('replay-chart');
     el.chartEmpty = $('replay-chart-empty');
     el.btnFollow = $('replay-btn-follow');
     el.hud = $('replay-hud');
+    el.hudToggle = $('replay-hud-toggle');
     el.hudStatus = $('replay-hud-status');
     el.hudProgress = $('replay-hud-progress');
     el.hudTimeUtc = $('replay-hud-time-utc');
@@ -748,6 +985,25 @@
     if (el.btnLoad) el.btnLoad.addEventListener('click', loadData);
     if (el.btnFullscreen) el.btnFullscreen.addEventListener('click', toggleFullscreen);
     if (el.btnFollow) el.btnFollow.addEventListener('click', onSnapFollow);
+    if (el.hudToggle) el.hudToggle.addEventListener('click', onHudToggle);
+
+    if (el.dock) {
+      el.dock.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-tool]');
+        if (btn) {
+          var tool = btn.getAttribute('data-tool');
+          selectTool(tool);
+          return;
+        }
+        var actionBtn = e.target.closest('[data-action]');
+        if (actionBtn) {
+          var action = actionBtn.getAttribute('data-action');
+          if (action === 'clear') {
+            onClearDrawings();
+          }
+        }
+      });
+    }
 
     if (el.play) el.play.addEventListener('click', onPlayToggle);
     if (el.stepBack) el.stepBack.addEventListener('click', function () { onStep(-1); });
@@ -775,7 +1031,14 @@
   function createController() {
     if (!global.SmcReplayEngine) return null;
     var ctrl = global.SmcReplayEngine.create();
-    ctrl.on('frame', function (snapshot) { render(snapshot); });
+    ctrl.on('frame', function (snapshot) {
+      render(snapshot);
+      if (simulatorApi && snapshot && snapshot.candle) {
+        var hit = simulatorApi.evaluateCandle(snapshot.candle, snapshot.index);
+        if (hit) syncStorage();
+      }
+      if (canvasApi) canvasApi.requestRedraw();
+    });
     ctrl.on('state', function () { render(ctrl.snapshot()); });
     return ctrl;
   }
@@ -807,6 +1070,13 @@
       loadCoverage: loadCoverage,
       loadData: loadData,
       getChart: function () { return chartApi; },
+      getCanvasApi: function () { return canvasApi; },
+      getDrawingsApi: function () { return drawingsApi; },
+      getSimulatorApi: function () { return simulatorApi; },
+      getLedgerApi: function () { return simulatorApi ? simulatorApi.getLedger() : null; },
+      getStorageApi: function () { return global.SmcReplayStorage; },
+      getActiveTool: function () { return currentTool; },
+      selectTool: selectTool,
       snapshot: function () { return controller ? controller.snapshot() : null; },
       setFollow: function (v) { if (chartApi) chartApi.setFollow(v); },
       isFollowing: function () { return chartApi ? chartApi.isFollowing() : false; },

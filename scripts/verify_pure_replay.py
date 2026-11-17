@@ -35,6 +35,14 @@ import time
 import urllib.request
 from typing import Any, Optional
 
+# Windows consoles default to cp1252, which cannot encode glyphs this report
+# prints (e.g. the "⛶" fullscreen button label). Reconfigure once so the run
+# never dies mid-suite with UnicodeEncodeError before reporting the result.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        _reconfigure(encoding="utf-8", errors="replace")
+
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -291,6 +299,25 @@ class Page:
     def snapshot(self) -> dict[str, Any]:
         return self.js("SmcDebug.replay.snapshot()")
 
+    def press_key(self, key: str, code: str, virtual_key: int, text: str = "") -> None:
+        """Send a real key press through CDP so focus and typing guards apply.
+
+        Synthetic ``KeyboardEvent`` dispatch bypasses the browser's focus model,
+        which means a shortcut can look green even if it fires while the user is
+        typing inside an input. This routes through Input.dispatchKeyEvent.
+        """
+        base = {
+            "key": key,
+            "code": code,
+            "windowsVirtualKeyCode": virtual_key,
+            "nativeVirtualKeyCode": virtual_key,
+        }
+        down = dict(base, type="keyDown")
+        if text:
+            down["text"] = text
+        self.cdp.call("Input.dispatchKeyEvent", down)
+        self.cdp.call("Input.dispatchKeyEvent", dict(base, type="keyUp"))
+
     def meta(self) -> dict[str, Any]:
         return self.js("SmcDebug.replay.getPayload().meta")
 
@@ -493,6 +520,1112 @@ def main() -> int:
                 " document.getElementById('replay-hud-close').textContent].join(' / ')"
             ),
         )
+        hud_box = page.js(
+            "(() => {"
+            "  const hud = document.getElementById('replay-hud').getBoundingClientRect();"
+            "  const wrap = document.getElementById('replay-chart-wrap').getBoundingClientRect();"
+            "  const plot = document.getElementById('replay-chart').getBoundingClientRect();"
+            "  const tsWidth = window.SmcDebug.replay.getChart().chart.timeScale().width();"
+            "  return { left: hud.left - wrap.left, top: hud.top - wrap.top,"
+            "           right: hud.right - plot.left, plotWidth: tsWidth, width: hud.width };"
+            "})()"
+        )
+        check(
+            "HUD sits in the top-left corner",
+            45 <= hud_box["left"] <= 70 and 0 <= hud_box["top"] <= 20,
+            hud_box,
+        )
+        check(
+            "HUD clears the right price scale",
+            hud_box["right"]
+            <= hud_box["plotWidth"] - (120 if hud_box["plotWidth"] >= 1200 else 40),
+            hud_box,
+        )
+        check("HUD keeps a compact single-row width", hud_box["width"] <= 900, hud_box)
+        page.js("document.getElementById('replay-hud-toggle').click()")
+        minimized = page.js(
+            "document.getElementById('replay-hud').classList.contains('is-minimized')"
+        )
+        check("HUD minimize button collapses the body", minimized)
+        page.js("document.getElementById('replay-hud-toggle').click()")
+        restored = not page.js(
+            "document.getElementById('replay-hud').classList.contains('is-minimized')"
+        )
+        check("HUD toggle button restores the body", restored)
+
+        page.js("document.body.focus()")
+        page.press_key("h", "KeyH", 72, "h")
+        hidden = page.js(
+            "document.getElementById('replay-hud').classList.contains('is-hidden')"
+        )
+        check("pressing 'h' hides the HUD", hidden)
+        page.press_key("h", "KeyH", 72, "h")
+        shown = not page.js(
+            "document.getElementById('replay-hud').classList.contains('is-hidden')"
+        )
+        check("pressing 'h' again unhides the HUD", shown)
+
+        page.js("document.getElementById('replay-scrubber').focus()")
+        page.press_key("h", "KeyH", 72, "h")
+        typing_safe = not page.js(
+            "document.getElementById('replay-hud').classList.contains('is-hidden')"
+        )
+        check("'h' is ignored while a form field has focus", typing_safe)
+        page.js("document.getElementById('replay-scrubber').blur()")
+
+        # --- Fase 2: Vertical Dock & Canvas Overlay (T-SIM-03 & T-SIM-04) ---
+        dock_info = page.js(
+            "(() => {"
+            "  const dock = document.getElementById('replay-dock');"
+            "  if (!dock) return null;"
+            "  const style = window.getComputedStyle(dock);"
+            "  const rect = dock.getBoundingClientRect();"
+            "  const buttons = dock.querySelectorAll('.replay-dock-btn').length;"
+            "  return { position: style.position, width: Math.round(rect.width), buttons: buttons };"
+            "})()"
+        )
+        check(
+            "vertical dock exists as flex child (width ~48px, 8 buttons)",
+            dock_info is not None
+            and dock_info["position"] != "absolute"
+            and 44 <= dock_info["width"] <= 52
+            and dock_info["buttons"] == 8,
+            dock_info,
+        )
+
+        tool_state = page.js(
+            "(() => {"
+            "  const btn = document.getElementById('tool-cursor');"
+            "  const canvas = document.getElementById('replay-drawing-canvas');"
+            "  const style = window.getComputedStyle(canvas);"
+            "  return { active: btn ? btn.classList.contains('is-active') : false, pointerEvents: style.pointerEvents };"
+            "})()"
+        )
+        check(
+            "cursor tool is active on start and canvas has pointer-events: none",
+            tool_state["active"] and tool_state["pointerEvents"] == "none",
+            tool_state,
+        )
+
+        page.js("document.getElementById('tool-rect').click()")
+        rect_state = page.js(
+            "(() => {"
+            "  const btn = document.getElementById('tool-rect');"
+            "  const curBtn = document.getElementById('tool-cursor');"
+            "  const canvas = document.getElementById('replay-drawing-canvas');"
+            "  const style = window.getComputedStyle(canvas);"
+            "  return {"
+            "    rectActive: btn.classList.contains('is-active'),"
+            "    curActive: curBtn.classList.contains('is-active'),"
+            "    isDrawing: canvas.classList.contains('is-drawing'),"
+            "    pointerEvents: style.pointerEvents"
+            "  };"
+            "})()"
+        )
+        check(
+            "clicking rect tool activates drawing mode with pointer-events: auto",
+            rect_state["rectActive"]
+            and not rect_state["curActive"]
+            and rect_state["pointerEvents"] == "auto",
+            rect_state,
+        )
+
+        page.press_key("v", "KeyV", 86, "v")
+        cur_switched = page.js(
+            "document.getElementById('tool-cursor').classList.contains('is-active')"
+            " && window.getComputedStyle(document.getElementById('replay-drawing-canvas')).pointerEvents === 'none'"
+        )
+        check(
+            "pressing 'v' restores cursor tool and pointer-events: none", cur_switched
+        )
+
+        chart_api_check = page.js(
+            "(() => {"
+            "  const chart = window.SmcDebug.replay.getChart();"
+            "  return {"
+            "    hasGetChart: typeof chart.getChart === 'function',"
+            "    hasGetSeries: typeof chart.getSeries === 'function',"
+            "    hasTimeToCoord: typeof chart.timeToCoordinate === 'function',"
+            "    hasPriceToCoord: typeof chart.priceToCoordinate === 'function',"
+            "    hasSubscribeRange: typeof chart.subscribeRange === 'function',"
+            "    hasSubscribeClick: typeof chart.subscribeClick === 'function'"
+            "  };"
+            "})()"
+        )
+        check(
+            "official chartApi handle methods are fully exposed",
+            all(chart_api_check.values()),
+            chart_api_check,
+        )
+
+        tooltip = page.js(
+            "(() => {"
+            "  const b = document.getElementById('tool-rect');"
+            "  const s = window.getComputedStyle(b, '::after');"
+            "  const r = b.getBoundingClientRect();"
+            "  return { content: s.content, position: s.position,"
+            "           left: parseFloat(s.left), buttonWidth: r.width };"
+            "})()"
+        )
+        check(
+            "dock buttons carry a right-floating CSS tooltip",
+            tooltip["content"] not in ("none", "normal", "", "auto", '""')
+            and tooltip["position"] == "absolute"
+            and tooltip["left"] >= tooltip["buttonWidth"],
+            tooltip,
+        )
+
+        # The overlay canvas is a child of #replay-chart, which owns the chart
+        # pan gesture listener. Prove that drawing mode stops the bubble instead
+        # of silently arming a chart drag.
+        page.js(
+            "window.__chartPointerDown = 0;"
+            " document.getElementById('replay-chart').addEventListener('pointerdown',"
+            " function () { window.__chartPointerDown += 1; });"
+        )
+        canvas_center = page.js(
+            "(() => {"
+            "  const r = document.getElementById('replay-drawing-canvas').getBoundingClientRect();"
+            "  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };"
+            "})()"
+        )
+
+        def click_at(point: dict[str, Any]) -> None:
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": point["x"], "y": point["y"], "buttons": 0},
+            )
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mousePressed",
+                    "x": point["x"],
+                    "y": point["y"],
+                    "button": "left",
+                    "buttons": 1,
+                    "clickCount": 1,
+                },
+            )
+            time.sleep(0.05)
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": point["x"],
+                    "y": point["y"],
+                    "button": "left",
+                    "buttons": 0,
+                    "clickCount": 1,
+                },
+            )
+
+        page.js("document.getElementById('tool-rect').click()")
+        click_at(canvas_center)
+        draw_hits = page.js("window.__chartPointerDown")
+        check(
+            "drawing mode keeps pointerdown away from the chart gesture layer",
+            draw_hits == 0,
+            {"containerPointerDowns": draw_hits},
+        )
+
+        page.press_key("v", "KeyV", 86, "v")
+        click_at(canvas_center)
+        cursor_hits = page.js("window.__chartPointerDown")
+        check(
+            "cursor mode still lets pointerdown reach the chart",
+            cursor_hits >= 1,
+            {"containerPointerDowns": cursor_hits},
+        )
+
+        # Price-scale changes (autoscale / axis drag) do not fire
+        # subscribeVisibleLogicalRangeChange, so the overlay needs its own
+        # renderer-driven scale watch.
+        old_margins = page.js(
+            "window.SmcDebug.replay.getChart().getChart()"
+            ".priceScale('right').options().scaleMargins"
+        )
+        page.js(
+            "window.__renders = 0;"
+            " window.__r = function () { window.__renders += 1; };"
+            " window.SmcDebug.replay.getCanvasApi().registerRenderer(window.__r);"
+        )
+        page.wait_until("window.__renders > 0", timeout=6)  # consume the initial paint
+        renders_before = page.js("window.__renders")
+        page.js(
+            "window.SmcDebug.replay.getChart().getChart()"
+            ".priceScale('right').applyOptions({ scaleMargins: { top: 0.3, bottom: 0.3 } })"
+        )
+        repainted = page.wait_until("window.__renders > %d" % renders_before, timeout=6)
+        check(
+            "price-scale change repaints the overlay without a range change",
+            repainted,
+            {
+                "rendersBefore": renders_before,
+                "rendersAfter": page.js("window.__renders"),
+            },
+        )
+        page.js(
+            "window.SmcDebug.replay.getCanvasApi().unregisterRenderer(window.__r);"
+            " window.SmcDebug.replay.getChart().getChart()"
+            ".priceScale('right').applyOptions({ scaleMargins: %s })"
+            % json.dumps(old_margins)
+        )
+
+        redraws_before = page.js(
+            "window.SmcDebug.replay.getCanvasApi().getRedrawCount()"
+        )
+        page.press_key("ArrowRight", "ArrowRight", 39)
+        advanced = page.wait_until(
+            "window.SmcDebug.replay.getCanvasApi().getRedrawCount() > %d"
+            % redraws_before,
+            timeout=6,
+        )
+        check(
+            "canvas repaints when the replay advances",
+            advanced,
+            {
+                "before": redraws_before,
+                "after": page.js(
+                    "window.SmcDebug.replay.getCanvasApi().getRedrawCount()"
+                ),
+            },
+        )
+
+        # --- Fase 3: Core Drawing Tools (T-SIM-05A, 05B, 05C) ---
+        drawings_api_check = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  if (!api) return null;"
+            "  return {"
+            "    hasGetDrawings: typeof api.getDrawings === 'function',"
+            "    hasAddDrawing: typeof api.addDrawing === 'function',"
+            "    hasRemoveDrawing: typeof api.removeDrawing === 'function',"
+            "    hasClearDrawings: typeof api.clearDrawings === 'function',"
+            "    hasSelectDrawing: typeof api.selectDrawing === 'function',"
+            "    hasDeselect: typeof api.deselect === 'function',"
+            "    hasDeleteSelected: typeof api.deleteSelected === 'function'"
+            "  };"
+            "})()"
+        )
+        check(
+            "drawingsApi engine is instantiated and fully exposed",
+            drawings_api_check is not None and all(drawings_api_check.values()),
+            drawings_api_check,
+        )
+
+        def cdp_drag(p1: dict[str, int], p2: dict[str, int]) -> None:
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": p1["x"], "y": p1["y"]},
+            )
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mousePressed",
+                    "x": p1["x"],
+                    "y": p1["y"],
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {"type": "mouseMoved", "x": p2["x"], "y": p2["y"], "button": "left"},
+            )
+            page.cdp.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseReleased",
+                    "x": p2["x"],
+                    "y": p2["y"],
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+
+        c_box = page.js(
+            "(() => {"
+            "  const r = document.getElementById('replay-drawing-canvas').getBoundingClientRect();"
+            "  return { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };"
+            "})()"
+        )
+        cx = int(c_box["left"])
+        cy = int(c_box["top"])
+
+        # 1. H-Line tool (T-SIM-05A)
+        page.js("document.getElementById('tool-hline').click()")
+        click_at({"x": cx + 300, "y": cy + 200})
+        hline_state = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const list = api ? api.getDrawings() : [];"
+            "  const tool = window.SmcDebug.replay.getActiveTool();"
+            "  return { count: list.length, lastType: list.length ? list[list.length - 1].type : null, tool: tool };"
+            "})()"
+        )
+        check(
+            "H-Line tool places line and auto-switches to cursor",
+            hline_state["count"] == 1
+            and hline_state["lastType"] == "hline"
+            and hline_state["tool"] == "cursor",
+            hline_state,
+        )
+
+        # 2. Rectangle tool (T-SIM-05A)
+        page.press_key("r", "KeyR", 82, "r")
+        cdp_drag({"x": cx + 150, "y": cy + 150}, {"x": cx + 350, "y": cy + 280})
+        rect_state_check = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const list = api ? api.getDrawings() : [];"
+            "  const tool = window.SmcDebug.replay.getActiveTool();"
+            "  const d = list.length ? list[list.length - 1] : null;"
+            "  const ts = window.SmcDebug.replay.getChart().getChart().timeScale();"
+            "  return { count: list.length, lastType: d ? d.type : null, tool: tool,"
+            "           x1: d ? ts.timeToCoordinate(d.t1) : null,"
+            "           x2: d ? ts.timeToCoordinate(d.t2) : null };"
+            "})()"
+        )
+        check(
+            "Rectangle tool places a visible zone box and auto-switches to cursor",
+            rect_state_check["count"] == 2
+            and rect_state_check["lastType"] == "rect"
+            and rect_state_check["tool"] == "cursor"
+            and rect_state_check["x1"] is not None
+            and rect_state_check["x2"] is not None,
+            rect_state_check,
+        )
+
+        # 3. Trendline tool (T-SIM-05B)
+        page.press_key("t", "KeyT", 84, "t")
+        cdp_drag({"x": cx + 200, "y": cy + 120}, {"x": cx + 420, "y": cy + 260})
+        trend_state_check = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const list = api ? api.getDrawings() : [];"
+            "  const tool = window.SmcDebug.replay.getActiveTool();"
+            "  const d = list.length ? list[list.length - 1] : null;"
+            "  const ts = window.SmcDebug.replay.getChart().getChart().timeScale();"
+            "  return { count: list.length, lastType: d ? d.type : null, tool: tool,"
+            "           x1: d ? ts.timeToCoordinate(d.t1) : null,"
+            "           x2: d ? ts.timeToCoordinate(d.t2) : null };"
+            "})()"
+        )
+        check(
+            "Trendline tool places a visible diagonal line and auto-switches to cursor",
+            trend_state_check["count"] == 3
+            and trend_state_check["lastType"] == "trendline"
+            and trend_state_check["tool"] == "cursor"
+            and trend_state_check["x1"] is not None
+            and trend_state_check["x2"] is not None,
+            trend_state_check,
+        )
+
+        # 4. Ruler tool (T-SIM-05B)
+        page.press_key("m", "KeyM", 77, "m")
+        cdp_drag({"x": cx + 250, "y": cy + 180}, {"x": cx + 400, "y": cy + 300})
+        ruler_state_check = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  return { count: api ? api.getDrawings().length : 0 };"
+            "})()"
+        )
+        check(
+            "Ruler tool is transient (drawings count unchanged)",
+            ruler_state_check["count"] == 3,
+            ruler_state_check,
+        )
+        page.press_key("Escape", "Escape", 27)
+
+        # 5. Object selection via chart click (T-SIM-05C)
+        # The click goes through CDP into the real chart canvas; no direct
+        # handler call is allowed here, because that would mask a broken
+        # subscribeClick wiring.
+        click_at({"x": cx + 300, "y": cy + 200})
+        selection_state = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const canvasApi = window.SmcDebug.replay.getCanvasApi();"
+            "  const selId = api ? api.getSelectedId() : null;"
+            "  const selItem = selId ? api.getDrawingById(selId) : null;"
+            "  return {"
+            "    hasSelection: Boolean(selId),"
+            "    selectedType: selItem ? selItem.type : null,"
+            "    isSelectionActive: canvasApi ? canvasApi.isSelectionActive() : false"
+            "  };"
+            "})()"
+        )
+        check(
+            "real chart click selects drawing object and arms handles",
+            selection_state["hasSelection"]
+            and selection_state["selectedType"] == "hline"
+            and selection_state["isSelectionActive"],
+            selection_state,
+        )
+
+        # 5b. Moving a selected object must persist on pointerup.
+        before_move = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const selId = api.getSelectedId();"
+            "  return selId ? api.getDrawingById(selId).price : null;"
+            "})()"
+        )
+        cdp_drag({"x": cx + 300, "y": cy + 200}, {"x": cx + 300, "y": cy + 260})
+        move_state = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const selId = api.getSelectedId();"
+            "  const item = selId ? api.getDrawingById(selId) : null;"
+            "  const raw = localStorage.getItem('xauusd_replay_drawings_v1_XAUUSD_2026_10');"
+            "  const stored = raw ? JSON.parse(raw) : [];"
+            "  const saved = stored.filter(function (d) { return d.id === selId; })[0];"
+            "  return { price: item ? item.price : null, savedPrice: saved ? saved.price : null };"
+            "})()"
+        )
+        check(
+            "moving a drawing persists the new price on pointerup",
+            before_move is not None
+            and move_state["price"] != before_move
+            and move_state["savedPrice"] is not None
+            and abs(move_state["savedPrice"] - move_state["price"]) < 1e-6,
+            {"before": before_move, "after": move_state},
+        )
+
+        # 6. Delete key deletes selected object (T-SIM-05C)
+        page.press_key("Delete", "Delete", 46)
+        delete_check = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const canvasApi = window.SmcDebug.replay.getCanvasApi();"
+            "  return {"
+            "    count: api ? api.getDrawings().length : 0,"
+            "    selId: api ? api.getSelectedId() : null,"
+            "    isSelectionActive: canvasApi ? canvasApi.isSelectionActive() : false"
+            "  };"
+            "})()"
+        )
+        check(
+            "Delete key removes selected drawing and resets selection mode",
+            delete_check["count"] == 2
+            and delete_check["selId"] is None
+            and not delete_check["isSelectionActive"],
+            delete_check,
+        )
+
+        # 7. Clear button clears all drawings (T-SIM-05C)
+        page.js("document.getElementById('tool-clear').click()")
+        clear_check = page.js(
+            "window.SmcDebug.replay.getDrawingsApi().getDrawings().length"
+        )
+        check(
+            "dock Clear button clears all drawings from canvas",
+            clear_check == 0,
+            {"remainingDrawings": clear_check},
+        )
+
+        # ------------------------------------------------------ 6. Fase 4 Strategy Simulator & Ledger (T-SIM-06 & T-SIM-07)
+        sim_api_check = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const ledger = window.SmcDebug.replay.getLedgerApi();"
+            "  return {"
+            "    hasSim: Boolean(sim),"
+            "    hasLedger: Boolean(ledger),"
+            "    hasAddPosition: typeof (sim && sim.addPosition) === 'function',"
+            "    hasClosePosition: typeof (sim && sim.closePosition) === 'function',"
+            "    hasEvaluateCandle: typeof (sim && sim.evaluateCandle) === 'function',"
+            "    hasGetPositions: typeof (sim && sim.getPositions) === 'function'"
+            "  };"
+            "})()"
+        )
+        check(
+            "simulatorApi and ledgerApi are instantiated and exposed",
+            sim_api_check is not None and all(sim_api_check.values()),
+            sim_api_check,
+        )
+
+        # Long position placement (T-SIM-06)
+        page.js("document.getElementById('tool-long').click()")
+        click_at({"x": cx + 320, "y": cy + 220})
+        long_pos_check = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const active = sim ? sim.getActivePosition() : null;"
+            "  const tool = window.SmcDebug.replay.getActiveTool();"
+            "  return {"
+            "    hasActive: Boolean(active),"
+            "    side: active ? active.side : null,"
+            "    status: active ? active.status : null,"
+            "    lot: active ? active.lot : null,"
+            "    tool: tool"
+            "  };"
+            "})()"
+        )
+        check(
+            "Long position tool places BUY box with auto-switch to cursor",
+            long_pos_check["hasActive"]
+            and long_pos_check["side"] == "BUY"
+            and long_pos_check["status"] == "ACTIVE"
+            and long_pos_check["tool"] == "cursor",
+            long_pos_check,
+        )
+
+        # Manual Close via 'c' key (T-SIM-07)
+        page.press_key("c", "KeyC", 67, "c")
+        manual_close_check = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const ledger = window.SmcDebug.replay.getLedgerApi();"
+            "  const active = sim ? sim.getActivePosition() : null;"
+            "  const summary = ledger ? ledger.getSummary() : null;"
+            "  return {"
+            "    activeIsNull: active === null,"
+            "    totalTrades: summary ? summary.totalTrades : 0,"
+            "    lastReason: summary && summary.trades.length ? summary.trades[summary.trades.length - 1].reason : null"
+            "  };"
+            "})()"
+        )
+        check(
+            "pressing 'c' manually closes active position and records into paper ledger",
+            manual_close_check["activeIsNull"]
+            and manual_close_check["totalTrades"] >= 1
+            and "MANUAL_CLOSE" in (manual_close_check["lastReason"] or ""),
+            manual_close_check,
+        )
+
+        # Short position placement via shortcut 's' (T-SIM-06)
+        page.press_key("s", "KeyS", 83, "s")
+        click_at({"x": cx + 340, "y": cy + 210})
+        short_pos_check = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const active = sim ? sim.getActivePosition() : null;"
+            "  return {"
+            "    hasActive: Boolean(active),"
+            "    side: active ? active.side : null,"
+            "    status: active ? active.status : null"
+            "  };"
+            "})()"
+        )
+        check(
+            "Short position tool places SELL box",
+            short_pos_check["hasActive"]
+            and short_pos_check["side"] == "SELL"
+            and short_pos_check["status"] == "ACTIVE",
+            short_pos_check,
+        )
+
+        # The R:R / TP / SL card used to be drawn at the box centre, hiding the
+        # TP and SL zones. It must sit outside the box, in the left gutter, and
+        # stay small enough to read. Measured from the real canvas pixels.
+        page.js("document.getElementById('tool-clear').click()")
+        page.js(
+            "(function(){var s=document.getElementById('replay-scrubber');"
+            " s.value='100'; s.dispatchEvent(new Event('input',{bubbles:true}));})()"
+        )
+        page.js("document.getElementById('tool-long').click()")
+        click_at({"x": cx + 600, "y": cy + 250})
+        card_layout = page.js(
+            "(() => {"
+            "  const chart = window.SmcDebug.replay.getChart();"
+            "  const p = window.SmcDebug.replay.getSimulatorApi().getPositions()[0];"
+            "  if (!p) return null;"
+            "  const x1 = chart.timeToCoordinate(p.entryTime);"
+            "  const x2 = chart.timeToCoordinate(p.targetTime);"
+            "  const yE = chart.priceToCoordinate(p.entryPrice);"
+            "  const yS = chart.priceToCoordinate(p.sl);"
+            "  const yT = chart.priceToCoordinate(p.tp);"
+            "  if (x1 == null || yE == null || yS == null || yT == null) return null;"
+            "  const left = Math.min(x1, x2 == null ? x1 + 180 : x2);"
+            "  const right = Math.max(x1, x2 == null ? x1 + 180 : x2);"
+            "  const c = document.getElementById('replay-drawing-canvas');"
+            "  const ctx = c.getContext('2d');"
+            "  const dpr = c.width / c.clientWidth;"
+            "  const w = c.width, h = c.height;"
+            "  const data = ctx.getImageData(0, 0, w, h).data;"
+            "  /* The card is a solid filled block; handles are small dots. Keep only"
+            "     pixels whose 5x5 neighbourhood is fully opaque, then take the"
+            "     largest connected component so handles cannot extend its bbox. */"
+            "  const core = new Uint8Array(w * h);"
+            "  for (let yy = 2; yy < h - 2; yy += 1) {"
+            "    for (let xx = 2; xx < w - 2; xx += 1) {"
+            "      let ok = 1;"
+            "      for (let dy = -2; dy <= 2 && ok; dy += 1) {"
+            "        for (let dx = -2; dx <= 2; dx += 1) {"
+            "          if (data[((yy + dy) * w + (xx + dx)) * 4 + 3] < 200) { ok = 0; break; }"
+            "        }"
+            "      }"
+            "      if (ok) core[yy * w + xx] = 1;"
+            "    }"
+            "  }"
+            "  const seen = new Uint8Array(w * h);"
+            "  let best = null;"
+            "  for (let yy = 0; yy < h; yy += 1) {"
+            "    for (let xx = 0; xx < w; xx += 1) {"
+            "      const start = yy * w + xx;"
+            "      if (!core[start] || seen[start]) continue;"
+            "      const stack = [start];"
+            "      seen[start] = 1;"
+            "      let n = 0, minX = xx, maxX = xx, minY = yy, maxY = yy;"
+            "      while (stack.length) {"
+            "        const idx = stack.pop();"
+            "        const px = idx % w;"
+            "        const py = (idx - px) / w;"
+            "        n += 1;"
+            "        if (px < minX) minX = px;"
+            "        if (px > maxX) maxX = px;"
+            "        if (py < minY) minY = py;"
+            "        if (py > maxY) maxY = py;"
+            "        const nb = [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]];"
+            "        for (let k = 0; k < 4; k += 1) {"
+            "          const nx = nb[k][0], ny = nb[k][1];"
+            "          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;"
+            "          const ni = ny * w + nx;"
+            "          if (core[ni] && !seen[ni]) { seen[ni] = 1; stack.push(ni); }"
+            "        }"
+            "      }"
+            "      if (!best || n > best.px) {"
+            "        best = { px: n, left: minX / dpr, top: minY / dpr,"
+            "                 right: maxX / dpr, bottom: maxY / dpr,"
+            "                 w: (maxX - minX) / dpr, h: (maxY - minY) / dpr };"
+            "      }"
+            "    }"
+            "  }"
+            "  const card = (best && best.px > 200) ? best : null;"
+            "  return { box: { left: left, right: right,"
+            "                  top: Math.min(yE, yS, yT),"
+            "                  bottom: Math.max(yE, yS, yT) },"
+            "           card: card };"
+            "})()"
+        )
+        check(
+            "position R:R card renders outside the box, not on top of TP/SL zones",
+            card_layout is not None
+            and card_layout["card"] is not None
+            and card_layout["card"]["right"] <= card_layout["box"]["left"] - 2
+            and card_layout["card"]["w"] <= 170
+            and card_layout["card"]["h"] <= 60,
+            card_layout,
+        )
+
+        # Clear positions via dock Clear button (T-SIM-06/07)
+        page.js("document.getElementById('tool-clear').click()")
+        sim_clear_check = page.js(
+            "window.SmcDebug.replay.getSimulatorApi().getPositions().length"
+        )
+        check(
+            "dock Clear button clears positions from simulator",
+            sim_clear_check == 0,
+            {"remainingPositions": sim_clear_check},
+        )
+
+        # ------------------------------------------------------ 7. Fase 5 Storage Persistence (T-SIM-08)
+        storage_api_check = page.js(
+            "(() => {"
+            "  const storage = window.SmcDebug.replay.getStorageApi();"
+            "  return {"
+            "    hasStorage: Boolean(storage),"
+            "    hasFormatKey: typeof (storage && storage.formatKey) === 'function',"
+            "    hasSaveDrawings: typeof (storage && storage.saveDrawings) === 'function',"
+            "    hasLoadDrawings: typeof (storage && storage.loadDrawings) === 'function'"
+            "  };"
+            "})()"
+        )
+        check(
+            "storageApi is instantiated and exposed",
+            storage_api_check is not None and all(storage_api_check.values()),
+            storage_api_check,
+        )
+
+        # Place a drawing, test that it is saved under the canonical month:02d key
+        page.js("document.getElementById('tool-hline').click()")
+        click_at({"x": cx + 300, "y": cy + 200})
+        saved_key_check = page.js(
+            "(() => {"
+            "  const k = 'xauusd_replay_drawings_v1_XAUUSD_2026_10';"
+            "  const val = localStorage.getItem(k);"
+            "  return { keyExists: Boolean(val), raw: val ? JSON.parse(val) : [] };"
+            "})()"
+        )
+        check(
+            "drawings are automatically persisted to localStorage under canonical key",
+            saved_key_check["keyExists"] and len(saved_key_check["raw"]) >= 1,
+            saved_key_check,
+        )
+
+        # ---------------------------------------------- 8. Fase 4/5 integration
+        # The checks above exercise each module in isolation. The following
+        # drive the real wiring: the frame hook, localStorage restore, and the
+        # per-month lifecycle.
+        page.js(
+            "(function(){var s=document.getElementById('replay-scrubber');"
+            " s.value='100'; s.dispatchEvent(new Event('input',{bubbles:true}));})()"
+        )
+
+        # 8a. Manual close must exit at the live candle close, not the entry.
+        page.js("document.getElementById('tool-long').click()")
+        click_at({"x": cx + 320, "y": cy + 260})
+        manual_setup = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const p = sim.getActivePosition();"
+            "  const snap = window.SmcDebug.replay.snapshot();"
+            "  if (!p || !snap.candle) return null;"
+            "  p.entryPrice = snap.candle.close + 25;"
+            "  p.sl = p.entryPrice - 1000;"
+            "  p.tp = p.entryPrice + 1000;"
+            "  return { entryPrice: p.entryPrice, close: snap.candle.close, index: snap.index };"
+            "})()"
+        )
+        page.press_key("c", "KeyC", 67, "c")
+        manual_exit = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  const t = summary.trades[summary.trades.length - 1];"
+            "  return { exitPrice: t.exitPrice, entryPrice: t.entryPrice, reason: t.reason };"
+            "})()"
+        )
+        check(
+            "manual close exits at the live candle close, not the entry price",
+            manual_setup is not None
+            and abs(manual_exit["exitPrice"] - manual_setup["close"]) < 1e-6
+            and abs(manual_exit["entryPrice"] - manual_setup["close"]) > 1,
+            {"setup": manual_setup, "trade": manual_exit},
+        )
+
+        # 8b. TP/SL evaluation through the real frame hook (not a direct call).
+        trades_before_auto = page.js(
+            "window.SmcDebug.replay.getLedgerApi().getSummary().totalTrades"
+        )
+        page.js("document.getElementById('tool-long').click()")
+        click_at({"x": cx + 320, "y": cy + 240})
+        auto_setup = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const p = sim.getActivePosition();"
+            "  const snap = window.SmcDebug.replay.snapshot();"
+            "  if (!p || !snap.candle) return null;"
+            "  p.tp = snap.candle.low - 5;"
+            "  p.sl = 0.01;"
+            "  return { entryBarIndex: p.entryBarIndex, index: snap.index, status: p.status };"
+            "})()"
+        )
+        check(
+            "position records the live bar index (anti look-ahead anchor)",
+            auto_setup is not None
+            and auto_setup["entryBarIndex"] == auto_setup["index"],
+            auto_setup,
+        )
+
+        # Re-publish a frame at the SAME index: the entry bar must be skipped.
+        page.js(
+            "(function(){var s=document.getElementById('replay-scrubber');"
+            " s.value=String(window.SmcDebug.replay.snapshot().index);"
+            " s.dispatchEvent(new Event('input',{bubbles:true}));})()"
+        )
+        same_bar = page.js(
+            "(() => {"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const p = sim.getActivePosition();"
+            "  return { status: p ? p.status : null,"
+            "           totalTrades: window.SmcDebug.replay.getLedgerApi().getSummary().totalTrades };"
+            "})()"
+        )
+        check(
+            "entry bar is excluded from TP/SL evaluation (anti look-ahead)",
+            same_bar["status"] == "ACTIVE"
+            and same_bar["totalTrades"] == trades_before_auto,
+            same_bar,
+        )
+
+        page.js("document.getElementById('replay-step-forward').click()")
+        closed = page.wait_until(
+            "window.SmcDebug.replay.getSimulatorApi().getActivePosition() === null",
+            timeout=10,
+        )
+        auto_hit = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  const t = summary.trades[summary.trades.length - 1];"
+            "  const raw = localStorage.getItem('xauusd_replay_ledger_v1_XAUUSD_2026_10');"
+            "  const stored = raw ? JSON.parse(raw) : null;"
+            "  return { totalTrades: summary.totalTrades, reason: t ? t.reason : null,"
+            "           storedTrades: stored ? stored.totalTrades : -1 };"
+            "})()"
+        )
+        check(
+            "playback closes the position bar-by-bar via the frame hook",
+            closed
+            and auto_hit["totalTrades"] == trades_before_auto + 1
+            and "TP_HIT" in (auto_hit["reason"] or ""),
+            auto_hit,
+        )
+        check(
+            "TP/SL hit is persisted to localStorage immediately",
+            auto_hit["storedTrades"] == auto_hit["totalTrades"],
+            auto_hit,
+        )
+
+        # 8b2. Regression: a rectangle started in whitespace (left of the first
+        # revealed bar) must snap to a real bar and stay painted. The old
+        # fallback anchored such shapes to the month's last bar, which is
+        # off-screen during replay, so timeToCoordinate() returned null and the
+        # committed box silently vanished.
+        drawings_before_ws = page.js(
+            "window.SmcDebug.replay.getDrawingsApi().getDrawings().length"
+        )
+        page.js("document.getElementById('tool-rect').click()")
+        cdp_drag({"x": cx + 100, "y": cy + 150}, {"x": cx + 1200, "y": cy + 280})
+        ws_rect = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const list = api ? api.getDrawings() : [];"
+            "  const d = list.length ? list[list.length - 1] : null;"
+            "  const ts = window.SmcDebug.replay.getChart().getChart().timeScale();"
+            "  return { count: list.length,"
+            "           x1: d ? ts.timeToCoordinate(d.t1) : null,"
+            "           x2: d ? ts.timeToCoordinate(d.t2) : null,"
+            "           distinct: d ? d.t1 !== d.t2 : false };"
+            "})()"
+        )
+        check(
+            "rectangle started in whitespace stays visible after commit",
+            ws_rect["count"] == drawings_before_ws + 1
+            and ws_rect["x1"] is not None
+            and ws_rect["x2"] is not None
+            and ws_rect["distinct"],
+            ws_rect,
+        )
+
+        # Resolvable coordinates are only a proxy: assert the overlay actually
+        # painted pixels inside the committed shape's box.
+        ws_paint = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const d = api.getDrawings().slice(-1)[0];"
+            "  const h = api.getAnchorHandles(d, 1466, 598);"
+            "  if (!h.length) return { painted: 0, sampled: 0 };"
+            "  const xs = h.map(function (k) { return k.x; });"
+            "  const ys = h.map(function (k) { return k.y; });"
+            "  const c = document.getElementById('replay-drawing-canvas');"
+            "  const ctx = c.getContext('2d');"
+            "  const dpr = c.width / c.clientWidth;"
+            "  const left = Math.max(0, Math.floor(Math.min.apply(null, xs) * dpr));"
+            "  const top = Math.max(0, Math.floor(Math.min.apply(null, ys) * dpr));"
+            "  const w = Math.max(1, Math.floor((Math.max.apply(null, xs) - Math.min.apply(null, xs)) * dpr));"
+            "  const hh = Math.max(1, Math.floor((Math.max.apply(null, ys) - Math.min.apply(null, ys)) * dpr));"
+            "  const data = ctx.getImageData(left, top, w, hh).data;"
+            "  let painted = 0;"
+            "  for (let i = 3; i < data.length; i += 4) { if (data[i] > 0) painted += 1; }"
+            "  return { sampled: data.length / 4, painted: painted };"
+            "})()"
+        )
+        check(
+            "committed rectangle actually paints pixels on the overlay canvas",
+            ws_paint["sampled"] > 100 and ws_paint["painted"] > 0,
+            ws_paint,
+        )
+
+        # 8c. Full reload: drawings, positions and the paper ledger must restore.
+        pre_reload = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  return {"
+            "    drawings: window.SmcDebug.replay.getDrawingsApi().getDrawings().length,"
+            "    positions: window.SmcDebug.replay.getSimulatorApi().getPositions().length,"
+            "    balance: summary.balance,"
+            "    totalTrades: summary.totalTrades"
+            "  };"
+            "})()"
+        )
+        cdp.call("Page.reload", {"ignoreCache": True})
+        reloaded = page.wait_until(
+            "!!(window.SmcDebug && SmcDebug.replay && SmcDebug.replay.snapshot()"
+            " && SmcDebug.replay.snapshot().totalBars > 0)",
+            timeout=60,
+        )
+        post_reload = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  return {"
+            "    drawings: window.SmcDebug.replay.getDrawingsApi().getDrawings().length,"
+            "    positions: window.SmcDebug.replay.getSimulatorApi().getPositions().length,"
+            "    balance: summary.balance,"
+            "    totalTrades: summary.totalTrades"
+            "  };"
+            "})()"
+        )
+        check(
+            "drawings survive a full page reload",
+            reloaded
+            and pre_reload["drawings"] >= 1
+            and post_reload["drawings"] == pre_reload["drawings"],
+            {"before": pre_reload, "after": post_reload},
+        )
+        check(
+            "position boxes survive a full page reload",
+            reloaded and post_reload["positions"] == pre_reload["positions"],
+            {"before": pre_reload, "after": post_reload},
+        )
+        check(
+            "paper ledger balance and trade count survive a reload",
+            reloaded
+            and abs(post_reload["balance"] - pre_reload["balance"]) < 0.01
+            and post_reload["totalTrades"] == pre_reload["totalTrades"],
+            {"before": pre_reload, "after": post_reload},
+        )
+
+        # 8d. Same month, different timeframe: objects must follow the trader.
+        page.js(
+            "[].forEach.call(document.querySelectorAll('#replay-timeframes [data-tf]'),"
+            " function(b){ if(b.getAttribute('data-tf')==='M15') b.click(); });"
+        )
+        page.js("document.getElementById('replay-btn-load').click()")
+        tf_ok = page.wait_until(
+            "SmcDebug.replay.getPayload().meta.timeframe === 'M15'"
+            " && SmcDebug.replay.snapshot().totalBars > 0",
+            timeout=60,
+        )
+        tf_state = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  return {"
+            "    drawings: window.SmcDebug.replay.getDrawingsApi().getDrawings().length,"
+            "    positions: window.SmcDebug.replay.getSimulatorApi().getPositions().length,"
+            "    balance: summary.balance"
+            "  };"
+            "})()"
+        )
+        check(
+            "drawings and positions persist across a timeframe switch",
+            tf_ok
+            and tf_state["drawings"] == pre_reload["drawings"]
+            and tf_state["positions"] == pre_reload["positions"],
+            tf_state,
+        )
+        check(
+            "paper ledger persists across a timeframe switch",
+            tf_ok and abs(tf_state["balance"] - pre_reload["balance"]) < 0.01,
+            {"stored": pre_reload["balance"], "after": tf_state["balance"]},
+        )
+
+        # Drawings must not merely survive as data — they must still project to
+        # pixels on the new series. M5 anchors are usually not M15 bar times, so
+        # timeToCoordinate() returns null for them; without the interpolation
+        # fallback the shapes silently disappear after the switch (spec §4.3).
+        tf_projection = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const list = api.getDrawings();"
+            "  const ts = window.SmcDebug.replay.getChart().getChart().timeScale();"
+            "  const c = window.SmcDebug.replay.getPayload().candles;"
+            "  const times = new Set(c.map(function (x) { return x.time; }));"
+            "  const shapes = list.filter(function (d) { return d.type !== 'hline'; });"
+            "  return {"
+            "    shapes: shapes.length,"
+            "    exact: shapes.filter(function (d) {"
+            "      return times.has(d.t1) && times.has(d.t2);"
+            "    }).length,"
+            "    projected: shapes.filter(function (d) {"
+            "      return api.getAnchorHandles(d, 1466, 598).length > 0;"
+            "    }).length,"
+            "    rawNull: shapes.filter(function (d) {"
+            "      return ts.timeToCoordinate(d.t1) === null"
+            "          || ts.timeToCoordinate(d.t2) === null;"
+            "    }).length"
+            "  };"
+            "})()"
+        )
+        check(
+            "time-anchored drawings still project after a timeframe switch",
+            tf_ok
+            and tf_projection["shapes"] >= 1
+            and tf_projection["projected"] == tf_projection["shapes"],
+            tf_projection,
+        )
+
+        # Back to M5 so the rest of the suite keeps its assumptions.
+        page.js(
+            "[].forEach.call(document.querySelectorAll('#replay-timeframes [data-tf]'),"
+            " function(b){ if(b.getAttribute('data-tf')==='M5') b.click(); });"
+        )
+        page.js("document.getElementById('replay-btn-load').click()")
+        page.wait_until(
+            "SmcDebug.replay.getPayload().meta.timeframe === 'M5'"
+            " && SmcDebug.replay.snapshot().totalBars > 0",
+            timeout=60,
+        )
+
+        # 8e. Different month: no state may leak across month keys.
+        page.js(
+            "(function(){var m=document.getElementById('replay-month');"
+            " m.value='9'; m.dispatchEvent(new Event('change',{bubbles:true}));})()"
+        )
+        page.js("document.getElementById('replay-btn-load').click()")
+        other_month_ok = page.wait_until(
+            "SmcDebug.replay.getPayload().meta.start_date.indexOf('2026-09') === 0"
+            " && SmcDebug.replay.snapshot().totalBars > 0",
+            timeout=60,
+        )
+        other_month = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  return {"
+            "    drawings: window.SmcDebug.replay.getDrawingsApi().getDrawings().length,"
+            "    positions: window.SmcDebug.replay.getSimulatorApi().getPositions().length,"
+            "    balance: summary.balance,"
+            "    totalTrades: summary.totalTrades"
+            "  };"
+            "})()"
+        )
+        check(
+            "switching month clears the previous month's drawings and positions",
+            other_month_ok
+            and other_month["drawings"] == 0
+            and other_month["positions"] == 0,
+            other_month,
+        )
+        check(
+            "switching month resets the paper ledger to its initial balance",
+            other_month_ok
+            and other_month["totalTrades"] == 0
+            and abs(other_month["balance"] - 10000.0) < 0.01,
+            other_month,
+        )
+
+        # Return to October so the following checks see the original month.
+        page.js(
+            "(function(){var m=document.getElementById('replay-month');"
+            " m.value='10'; m.dispatchEvent(new Event('change',{bubbles:true}));})()"
+        )
+        page.js("document.getElementById('replay-btn-load').click()")
+        back_ok = page.wait_until(
+            "SmcDebug.replay.getPayload().meta.start_date.indexOf('2026-10') === 0"
+            " && SmcDebug.replay.snapshot().totalBars > 0",
+            timeout=60,
+        )
+        back_state = page.js(
+            "(() => {"
+            "  const summary = window.SmcDebug.replay.getLedgerApi().getSummary();"
+            "  return {"
+            "    drawings: window.SmcDebug.replay.getDrawingsApi().getDrawings().length,"
+            "    positions: window.SmcDebug.replay.getSimulatorApi().getPositions().length,"
+            "    balance: summary.balance"
+            "  };"
+            "})()"
+        )
+        check(
+            "returning to the month restores its drawings, positions and ledger",
+            back_ok
+            and back_state["drawings"] == pre_reload["drawings"]
+            and back_state["positions"] == pre_reload["positions"]
+            and abs(back_state["balance"] - pre_reload["balance"]) < 0.01,
+            back_state,
+        )
+
+        # Clear to clean up
+        page.js("document.getElementById('tool-clear').click()")
         check(
             "no warning banner on a dense month",
             page.js(
@@ -1010,8 +2143,7 @@ def main() -> int:
             "document.dispatchEvent(new KeyboardEvent('keydown',{key:'f',code:'KeyF',bubbles:true}))"
         )
         page.wait_until(
-            "!!document.fullscreenElement"
-            " || document.getElementById('replay-chart-wrap').classList.contains('is-fullscreen')",
+            "document.getElementById('replay-btn-fullscreen').textContent.includes('Normal')",
             timeout=15,
         )
         fs = page.js(
@@ -1026,12 +2158,33 @@ def main() -> int:
         )
         check("chart still fills the screen", fs["chart"] > 400, f"{fs['chart']}px")
 
+        fs_hud = page.js(
+            "(() => {"
+            "  const hud = document.getElementById('replay-hud').getBoundingClientRect();"
+            "  const wrap = document.getElementById('replay-chart-wrap').getBoundingClientRect();"
+            "  const plot = document.getElementById('replay-chart').getBoundingClientRect();"
+            "  const tsWidth = window.SmcDebug.replay.getChart().chart.timeScale().width();"
+            "  return { left: hud.left - wrap.left, top: hud.top - wrap.top,"
+            "           right: hud.right - plot.left, plotWidth: tsWidth };"
+            "})()"
+        )
+        check(
+            "HUD keeps its top-left anchor in fullscreen",
+            45 <= fs_hud["left"] <= 70 and 0 <= fs_hud["top"] <= 20,
+            fs_hud,
+        )
+        check(
+            "HUD still clears the price scale in fullscreen",
+            fs_hud["right"]
+            <= fs_hud["plotWidth"] - (120 if fs_hud["plotWidth"] >= 1200 else 40),
+            fs_hud,
+        )
+
         page.js(
             "document.exitFullscreen ? document.exitFullscreen() : Promise.resolve()"
         )
         page.wait_until(
-            "!document.fullscreenElement"
-            " && !document.getElementById('replay-chart-wrap').classList.contains('is-fullscreen')",
+            "document.getElementById('replay-btn-fullscreen').textContent.includes('Fullscreen')",
             timeout=15,
         )
         back = page.js(
