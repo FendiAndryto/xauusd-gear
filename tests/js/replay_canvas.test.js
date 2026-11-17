@@ -53,12 +53,14 @@ test('switching tool changes active tool and pointer-events', () => {
   api.setTool('rect');
   assert.equal(api.getActiveTool(), 'rect');
   assert.equal(canvas.style.pointerEvents, 'auto');
+  assert.equal(canvas.style.touchAction, 'none');
   assert.equal(canvas.classList.contains('is-drawing'), true);
   assert.deepEqual(events, ['rect']);
 
   api.setTool('cursor');
   assert.equal(api.getActiveTool(), 'cursor');
   assert.equal(canvas.style.pointerEvents, 'none');
+  assert.equal(canvas.style.touchAction, '');
   assert.equal(canvas.classList.contains('is-drawing'), false);
   assert.deepEqual(events, ['rect', 'cursor']);
   api.destroy();
@@ -137,6 +139,7 @@ test('selection active enables pointer events in cursor mode and emits pointer e
 
   assert.equal(api.isSelectionActive(), true);
   assert.equal(canvas.style.pointerEvents, 'auto');
+  assert.equal(canvas.style.touchAction, 'none');
   assert.equal(canvas.classList.contains('is-selecting'), true);
 
   const selEvent = {

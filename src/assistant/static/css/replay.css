@@ -621,10 +621,16 @@ body:has(#pane-replay:not(.hidden)) .main-container {
   height: 100%;
   z-index: 5;
   pointer-events: none;
+  touch-action: none;
+}
+
+.replay-drawing-canvas.is-drawing,
+.replay-drawing-canvas.is-selecting {
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .replay-drawing-canvas.is-drawing {
-  pointer-events: auto;
   cursor: crosshair;
 }
 

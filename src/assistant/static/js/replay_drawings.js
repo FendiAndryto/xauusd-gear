@@ -627,7 +627,7 @@
         var d = drawings[i];
         if (d.type === 'hline') {
           var yCoord = priceToCoord(d.price);
-          if (yCoord != null && Math.abs(y - yCoord) <= 8) {
+          if (yCoord != null && Math.abs(y - yCoord) <= 12) {
             return d;
           }
         } else if (d.type === 'rect') {
@@ -636,10 +636,10 @@
           var y1 = priceToCoord(d.p1);
           var y2 = priceToCoord(d.p2);
           if (x1 != null && x2 != null && y1 != null && y2 != null) {
-            var left = Math.min(x1, x2) - 4;
-            var right = Math.max(x1, x2) + 4;
-            var top = Math.min(y1, y2) - 4;
-            var bottom = Math.max(y1, y2) + 4;
+            var left = Math.min(x1, x2) - 8;
+            var right = Math.max(x1, x2) + 8;
+            var top = Math.min(y1, y2) - 8;
+            var bottom = Math.max(y1, y2) + 8;
             if (x >= left && x <= right && y >= top && y <= bottom) {
               return d;
             }
@@ -651,7 +651,7 @@
           var ty2 = priceToCoord(d.p2);
           if (tx1 != null && tx2 != null && ty1 != null && ty2 != null) {
             var dist = pointToSegmentDistance(x, y, tx1, ty1, tx2, ty2);
-            if (dist <= 8) {
+            if (dist <= 12) {
               return d;
             }
           }
@@ -725,15 +725,19 @@
     }
 
     function findHandleAt(handles, x, y) {
+      var best = null;
+      var minDist = 20;
       for (var i = 0; i < handles.length; i += 1) {
         var h = handles[i];
         var dx = x - h.x;
         var dy = y - h.y;
-        if (Math.sqrt(dx * dx + dy * dy) <= 8) {
-          return h;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist <= minDist) {
+          minDist = dist;
+          best = h;
         }
       }
-      return null;
+      return best;
     }
 
     function handleSelectionPointer(type, x, y, time, price, payload) {

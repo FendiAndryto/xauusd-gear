@@ -115,16 +115,19 @@
         if (selectionActive) {
           canvas.classList.add('is-selecting');
           canvas.style.pointerEvents = 'auto';
+          canvas.style.touchAction = 'none';
           canvas.style.cursor = 'default';
         } else {
           canvas.classList.remove('is-selecting');
           canvas.style.pointerEvents = 'none';
+          canvas.style.touchAction = '';
           canvas.style.cursor = 'default';
         }
       } else {
         canvas.classList.remove('is-selecting');
         canvas.classList.add('is-drawing');
         canvas.style.pointerEvents = 'auto';
+        canvas.style.touchAction = 'none';
         canvas.style.cursor = 'crosshair';
       }
     }
@@ -307,6 +310,9 @@
             if (activeTool === 'cursor' && !selectionActive) return;
             if (type === 'pointerdown' && event.button != null && event.button !== 0) return;
             if (event.stopPropagation) event.stopPropagation();
+            if (event.cancelable && event.preventDefault) {
+              event.preventDefault();
+            }
             if (type === 'pointerdown' && canvas.setPointerCapture && event.pointerId != null) {
               try {
                 canvas.setPointerCapture(event.pointerId);
@@ -318,6 +324,16 @@
           });
         })(types[i]);
       }
+
+      var preventTouch = function (event) {
+        if (activeTool !== 'cursor' || selectionActive) {
+          if (event.cancelable && event.preventDefault) {
+            event.preventDefault();
+          }
+        }
+      };
+      canvas.addEventListener('touchstart', preventTouch, { passive: false });
+      canvas.addEventListener('touchmove', preventTouch, { passive: false });
     }
 
     // ------------------------------------------------------------- Lifecycle

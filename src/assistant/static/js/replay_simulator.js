@@ -580,19 +580,18 @@
 
         // Handles are tested first and with a generous radius: they are the
         // reason the user reaches for the box at all (R:R / TP / SL are set by
-        // dragging them), and a 12px circle is a small target next to the
-        // zone-wide horizontal bands.
-        if (Math.hypot(px - midX, py - yTp) <= 14) {
+        // dragging them), and an 18px circle gives accurate touch hit-testing.
+        if (Math.hypot(px - midX, py - yTp) <= 18) {
           return { pos: pos, part: 'tp_handle' };
         }
-        if (Math.hypot(px - midX, py - ySl) <= 14) {
+        if (Math.hypot(px - midX, py - ySl) <= 18) {
           return { pos: pos, part: 'sl_handle' };
         }
-        if (Math.hypot(px - midX, py - yEntry) <= 14) {
+        if (Math.hypot(px - midX, py - yEntry) <= 18) {
           return { pos: pos, part: 'entry_handle' };
         }
         var midY = (minY + maxY) / 2;
-        if (Math.hypot(px - maxX, py - midY) <= 14) {
+        if (Math.hypot(px - maxX, py - midY) <= 18) {
           return { pos: pos, part: 'right_handle' };
         }
 
@@ -680,7 +679,7 @@
           sel.tp = Number((dragState.origTp + deltaPrice).toFixed(3));
         }
         canvasApi.requestRedraw();
-      } else if (type === 'pointerup') {
+      } else if (type === 'pointerup' || type === 'pointercancel') {
         if (dragState) {
           dragState = null;
           canvasApi.setCursor('default');
