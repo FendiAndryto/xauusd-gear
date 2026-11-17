@@ -20,6 +20,23 @@ data/parquet/
 reports/*.csv
 *.log
 
+# Generated market data & research artifacts. These are rebuilt by the download
+# and experiment scripts, so they stay out of version control: the bar cache is
+# ~50 MB of regenerable Parquet, the experiment reports are ~54 MB of CSV, and
+# the journal DB is live runtime state (its WAL grows while the server runs).
+data/cache_bars/
+data/cache_bars_backup_*/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+reports/
+scratch/
+experiments_isolated/
+_legacy_epic2/
+_legacy_epic4/
+tiktok_page.html
+
 # Runtime output & throwaway audit scripts. The OHLC parity baseline is the one
 # exception: the ticket cites it as evidence, so it is force-added by hand.
-logs/
+logs/*
+!logs/_ohlc_baseline.json
