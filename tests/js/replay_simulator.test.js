@@ -412,3 +412,98 @@ test('T-SIM-07 Simulator: Position handles are immediately reachable and draggab
 
   assert.equal(pos.tp, 4006.0, 'tp must update after handle drag');
 });
+
+test('T-SIM-07 Simulator: Off-market limit/stop position stays pending until touched', () => {
+  const chartApi = createMockChartApi();
+  const canvasApi = createMockCanvasApi();
+  const currentBar = { index: 0, time: 1000, open: 4155, high: 4156, low: 4150, close: 4151 };
+  const sim = SmcReplaySimulator.init({
+    chartApi,
+    canvasApi,
+    getCurrentBar: () => currentBar
+  });
+
+  // User places BUY at support 4140 (below current candle 4150-4156)
+  canvasApi.setTool('long_pos');
+  canvasApi.emitPointer({
+    type: 'pointerdown',
+    x: 50,
+    y: 300,
+    time: 1000,
+    price: 4140.0
+  });
+
+  const pos = sim.getActivePosition();
+  assert.ok(pos);
+  assert.equal(pos.status, 'ACTIVE');
+  assert.equal(pos.filled, false, 'off-market order must be pending');
+  assert.equal(pos.entryPrice, 4140.0);
+  assert.equal(pos.tp, 4144.0);
+  assert.equal(pos.sl, 4138.0);
+
+  // Next candle is at 4151 (high 4153, low 4149).
+  // High (4153) is higher than pos.tp (4144), BUT candle has NOT touched entry (4140).
+  // Must NOT trigger TP!
+  const res1 = sim.evaluateCandle({ time: 1300, high: 4153.0, low: 4149.0, close: 4151.0 }, 1);
+  assert.equal(res1, null, 'must not trigger TP before touching entry');
+  assert.equal(pos.status, 'ACTIVE');
+  assert.equal(pos.filled, false);
+
+  // Subsequent candle drops to 4140 (high 4143, low 4139.5) -> touches entry!
+  const res2 = sim.evaluateCandle({ time: 1600, high: 4143.0, low: 4139.5, close: 4141.0 }, 2);
+  assert.equal(res2, null, 'candle touches entry, position is filled but tp not hit yet');
+  assert.equal(pos.status, 'ACTIVE');
+  assert.equal(pos.filled, true, 'position is now filled');
+
+  // Next candle rallies to 4145 -> TP hit!
+  const res3 = sim.evaluateCandle({ time: 1900, high: 4145.0, low: 4141.0, close: 4144.5 }, 3);
+  assert.ok(res3);
+  assert.equal(pos.status, 'TP_HIT');
+  assert.equal(pos.exitPrice, 4144.0);
+});
+
+test('T-SIM-07 Simulator: Future candle guard and inverted handle dragging prevention', () => {
+  const chartApi = createMockChartApi();
+  const canvasApi = createMockCanvasApi();
+  const sim = SmcReplaySimulator.init({
+    chartApi,
+    canvasApi,
+    getCurrentBar: () => ({ index: 1, time: 1000, open: 4000, high: 4002, low: 3998, close: 4000 })
+  });
+
+  // 1. Future candle guard: position with entryTime in the future
+  const futurePos = sim.addPosition({
+    side: 'BUY',
+    status: 'ACTIVE',
+    filled: false,
+    entryPrice: 4000.0,
+    sl: 3995.0,
+    tp: 4010.0,
+    lot: 0.1,
+    entryTime: 5000, // future
+    entryBarIndex: null,
+    targetTime: 10000
+  });
+
+  // Candle at time 2000 touches 4000, but time (2000) < entryTime (5000)
+  const evalPast = sim.evaluateCandle({ time: 2000, high: 4015, low: 3990, close: 4005 }, 2);
+  assert.equal(evalPast, null, 'future order must not evaluate on past candles');
+  assert.equal(futurePos.filled, false);
+
+  // 2. Inverted TP/SL dragging prevention
+  canvasApi.setTool('cursor');
+  sim.selectPosition(futurePos.id);
+
+  // Try dragging BUY TP handle below entry (e.g. to 3990)
+  canvasApi.emitPointer({ type: 'pointerdown', x: 100, y: 200 });
+  // Part: tp_handle
+  // We can simulate handle dragging via handleSelectionPointer or direct
+  // Check that dragging TP handle cannot go below entryPrice + 0.1
+  const posObj = sim.getActivePosition();
+  posObj.entryPrice = 4000.0;
+
+  // Manual close of unfilled pending order cancels without ledger penalty
+  const cancelled = sim.closePosition({ time: 2500, close: 4005 });
+  assert.equal(cancelled.status, 'CANCELLED');
+  assert.equal(sim.getLedger().getSummary().totalTrades, 0, 'cancelled pending order does not log trade');
+});

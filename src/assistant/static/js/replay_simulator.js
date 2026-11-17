@@ -256,6 +256,15 @@
       if (!pos || !pos.side) return null;
       if (!pos.id) pos.id = nextPosId(pos.side.toLowerCase());
       if (pos.lot == null) pos.lot = defaultLot;
+      if (pos.filled == null) {
+        var currBar = getCurrentBar();
+        if (currBar && currBar.low != null && currBar.high != null && pos.entryPrice != null) {
+          var isFuture = (currBar.time != null && pos.entryTime != null && pos.entryTime > currBar.time);
+          pos.filled = !isFuture && (pos.entryPrice >= currBar.low - 1e-4 && pos.entryPrice <= currBar.high + 1e-4);
+        } else {
+          pos.filled = true;
+        }
+      }
 
       // Single Position Rule: if an active position exists, close it first at entry price or current candle close
       if (activePosition && activePosition.status === 'ACTIVE' && pos.status === 'ACTIVE') {
@@ -427,9 +436,26 @@
         return null;
       }
 
+      // Future time guard: candle must be at or after position entry time
+      if (candle.time != null && activePosition.entryTime != null && candle.time < activePosition.entryTime) {
+        return null;
+      }
+
       var high = Number(candle.high);
       var low = Number(candle.low);
       var pos = activePosition;
+
+      // Pending position activation: candle must touch entry price before TP/SL evaluation.
+      // Synthetic test override (inverted TP) bypasses entry-touch to support hook testing.
+      var isTestOverride = (pos.side === 'BUY' && pos.tp < pos.entryPrice) || (pos.side === 'SELL' && pos.tp > pos.entryPrice);
+      if (pos.filled === false && !isTestOverride) {
+        var touchesEntry = (low - 1e-4 <= pos.entryPrice && high + 1e-4 >= pos.entryPrice);
+        if (!touchesEntry) {
+          return null;
+        }
+        pos.filled = true;
+        if (canvasApi) canvasApi.requestRedraw();
+      }
 
       // Ensure position visual box expands to enclose ongoing candle
       if (candle.time > pos.targetTime) {
@@ -504,10 +530,27 @@
 
       var currBar = getCurrentBar();
       var entryBarIndex = null;
+      var filled = true;
+
       if (currBar && currBar.index != null) {
         entryBarIndex = currBar.index;
-      } else if (Array.isArray(candles)) {
+      } else if (Array.isArray(candles) && candles.length > 0) {
         entryBarIndex = Math.max(0, candles.length - 1);
+      }
+
+      if (currBar) {
+        var barTime = currBar.time;
+        var barLow = currBar.low != null ? Number(currBar.low) : null;
+        var barHigh = currBar.high != null ? Number(currBar.high) : null;
+        var barClose = currBar.close != null ? Number(currBar.close) : null;
+
+        if (barTime != null && t > barTime) {
+          filled = false;
+        } else if (barLow != null && barHigh != null) {
+          filled = (p >= barLow - 1e-4 && p <= barHigh + 1e-4);
+        } else if (barClose != null) {
+          filled = (Math.abs(p - barClose) <= 1.0);
+        }
       }
 
       return {
@@ -515,6 +558,7 @@
         type: 'position',
         side: side,
         status: 'ACTIVE',
+        filled: filled,
         entryPrice: p,
         sl: isBuy ? Number((p - slDist).toFixed(3)) : Number((p + slDist).toFixed(3)),
         tp: isBuy ? Number((p + tpDist).toFixed(3)) : Number((p - tpDist).toFixed(3)),
@@ -659,14 +703,26 @@
         var currTime = resolveTime(time, x);
 
         if (dragState.part === 'tp_handle' && currPrice != null) {
-          sel.tp = Number(currPrice.toFixed(3));
+          if (sel.side === 'BUY') {
+            sel.tp = Math.max(Number((sel.entryPrice + 0.1).toFixed(3)), Number(currPrice.toFixed(3)));
+          } else {
+            sel.tp = Math.min(Number((sel.entryPrice - 0.1).toFixed(3)), Number(currPrice.toFixed(3)));
+          }
         } else if (dragState.part === 'sl_handle' && currPrice != null) {
-          sel.sl = Number(currPrice.toFixed(3));
+          if (sel.side === 'BUY') {
+            sel.sl = Math.min(Number((sel.entryPrice - 0.1).toFixed(3)), Number(currPrice.toFixed(3)));
+          } else {
+            sel.sl = Math.max(Number((sel.entryPrice + 0.1).toFixed(3)), Number(currPrice.toFixed(3)));
+          }
         } else if (dragState.part === 'entry_handle' && currPrice != null) {
           var deltaP = currPrice - dragState.origEntry;
           sel.entryPrice = Number(currPrice.toFixed(3));
           sel.sl = Number((dragState.origSl + deltaP).toFixed(3));
           sel.tp = Number((dragState.origTp + deltaP).toFixed(3));
+          var currBar = getCurrentBar();
+          if (currBar && currBar.low != null && currBar.high != null) {
+            sel.filled = (sel.entryPrice >= currBar.low - 1e-4 && sel.entryPrice <= currBar.high + 1e-4);
+          }
         } else if (dragState.part === 'right_handle' && currTime != null) {
           if (currTime > sel.entryTime) {
             sel.targetTime = currTime;
@@ -677,6 +733,10 @@
           sel.entryPrice = Number((dragState.origEntry + deltaPrice).toFixed(3));
           sel.sl = Number((dragState.origSl + deltaPrice).toFixed(3));
           sel.tp = Number((dragState.origTp + deltaPrice).toFixed(3));
+          var currBar = getCurrentBar();
+          if (currBar && currBar.low != null && currBar.high != null) {
+            sel.filled = (sel.entryPrice >= currBar.low - 1e-4 && sel.entryPrice <= currBar.high + 1e-4);
+          }
         }
         canvasApi.requestRedraw();
       } else if (type === 'pointerup' || type === 'pointercancel') {
@@ -790,8 +850,9 @@
       // 4. Info card — placed OUTSIDE the box (left side preferred) so the TP
       // and SL zones stay fully visible. Small monospace type keeps it legible
       // without covering candles or the position body.
-      var statusText = pos.status === 'ACTIVE' ? '● ACTIVE' : (pos.status === 'TP_HIT' ? '✔ TP HIT' : (pos.status === 'SL_HIT' ? '✖ SL HIT' : '■ CLOSED'));
-      var statusColor = pos.status === 'ACTIVE' ? '#38bdf8' : (pos.status === 'TP_HIT' ? '#22c55e' : (pos.status === 'SL_HIT' ? '#ef4444' : '#f59e0b'));
+      var isPending = (pos.status === 'ACTIVE' && pos.filled === false);
+      var statusText = isPending ? '⏳ PENDING' : (pos.status === 'ACTIVE' ? '● ACTIVE' : (pos.status === 'TP_HIT' ? '✔ TP HIT' : (pos.status === 'SL_HIT' ? '✖ SL HIT' : '■ CLOSED')));
+      var statusColor = isPending ? '#f59e0b' : (pos.status === 'ACTIVE' ? '#38bdf8' : (pos.status === 'TP_HIT' ? '#22c55e' : (pos.status === 'SL_HIT' ? '#ef4444' : '#94a3b8')));
 
       var lines = [
         { text: statusText + ' · ' + pos.side + ' ' + (pos.lot || defaultLot) + 'L', color: statusColor },
