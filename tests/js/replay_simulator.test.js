@@ -347,3 +347,68 @@ test('T-SIM-07 Simulator: Manual Close via closePosition / key C', () => {
   assert.equal(summary.totalTrades, 1);
   assert.equal(summary.trades[0].netPnl, 33.0);
 });
+
+test('T-SIM-07 Simulator: Position handles are immediately reachable and draggable after placement', () => {
+  const candles = [
+    { time: 1000 },
+    { time: 1300 }
+  ];
+  // Watermark is at bar 1 (time 1300). Target time 1900 extends into right whitespace.
+  const chartApi = {
+    timeToCoordinate: (t) => (t <= 1300 ? 50 + (t - 1000) * 0.5 : null),
+    coordinateToTime: (x) => (x <= 200 ? 1000 + (x - 50) * 2 : null),
+    priceToCoordinate: (p) => 300 - (p - 4000) * 10,
+    coordinateToPrice: (y) => 4000 - (y - 300) / 10,
+    getWatermark: () => 1,
+    timeScale: () => ({
+      logicalToCoordinate: (idx) => 50 + idx * 75
+    })
+  };
+  const canvasApi = createMockCanvasApi();
+  const sim = SmcReplaySimulator.init({
+    chartApi,
+    canvasApi,
+    getCandles: () => candles,
+    getCurrentBar: () => ({ time: 1300, close: 4000.0, high: 4002.0, low: 3998.0 })
+  });
+
+  // User places long position via pointer click while 'long_pos' tool active
+  canvasApi.setTool('long_pos');
+  canvasApi.emitPointer({
+    type: 'pointerdown',
+    x: 50,
+    y: 300, // price = 4000
+    time: 1000,
+    price: 4000.0
+  });
+
+  const pos = sim.getActivePosition();
+  assert.ok(pos, 'position must be created');
+  assert.equal(sim.getSelectedId(), pos.id);
+  assert.equal(canvasApi.isSelectionActive(), true, 'selection must be armed');
+
+  // onCommit switches tool to cursor
+  canvasApi.setTool('cursor');
+  // With fix, switching to cursor retains selectionActive = true
+  assert.equal(canvasApi.isSelectionActive(), true, 'selectionActive stays true on cursor transition');
+
+  // Calculate coordinates:
+  // entryTime=1000 -> x1 = 50
+  // targetTime = 1000 + 20 * 300 = 7000 (well past watermark bar 1).
+  // extrapolateCoord(7000): lastX=125, span=300, stepPx=75 -> 125 + ((7000-1300)/300)*75 = 125 + 1425 = 1550.
+  // midX = (50 + 1550) / 2 = 800.
+  // yTp for tp=4004.0: 300 - 40 = 260.
+  const midX = 800;
+  const yTp = 260;
+
+  // Hover over TP handle sets ns-resize cursor
+  canvasApi.emitPointer({ type: 'pointermove', x: midX, y: yTp });
+  assert.equal(canvasApi.getCursor(), 'ns-resize');
+
+  // Drag TP handle up by 20px (y: 260 -> 240, price: 4004 -> 4006)
+  canvasApi.emitPointer({ type: 'pointerdown', x: midX, y: yTp });
+  canvasApi.emitPointer({ type: 'pointermove', x: midX, y: 240, price: 4006.0 });
+  canvasApi.emitPointer({ type: 'pointerup', x: midX, y: 240 });
+
+  assert.equal(pos.tp, 4006.0, 'tp must update after handle drag');
+});

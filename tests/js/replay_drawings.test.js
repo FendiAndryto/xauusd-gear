@@ -263,3 +263,47 @@ test('T-SIM-05C: Hit testing, selection via subscribeClick, move and Delete key'
   assert.equal(canvasApi.isSelectionActive(), false);
   drawingsApi.destroy();
 });
+
+test('extrapolates rectangle forward into whitespace past revealed candles', () => {
+  const canvasApi = mockCanvasApi();
+  const candles = [
+    { time: 1000 },
+    { time: 1300 }
+  ];
+  const chartApi = {
+    timeToCoordinate: (t) => (t <= 1300 ? (t - 1000) * 0.5 + 50 : null),
+    coordinateToTime: (x) => (x <= 200 ? 1000 + (x - 50) * 2 : null),
+    priceToCoordinate: (p) => (3000 - p) * 2,
+    coordinateToPrice: (y) => 3000 - y / 2,
+    getWatermark: () => 1,
+    timeScale: () => ({
+      logicalToCoordinate: (idx) => 50 + idx * 75
+    })
+  };
+
+  const drawingsApi = SmcReplayDrawings.init({
+    canvasApi,
+    chartApi,
+    getCandles: () => candles
+  });
+
+  canvasApi.setTool('rect');
+
+  // Drag start at revealed bar (x=50, t=1000, p=2750), drag end in whitespace past last bar (x=350, y=200)
+  canvasApi._emitPointer({ type: 'pointerdown', x: 50, y: 100, time: 1000, price: 2750.0 });
+  // In whitespace, time is null
+  canvasApi._emitPointer({ type: 'pointermove', x: 350, y: 200, time: null, price: 2700.0 });
+  canvasApi._emitPointer({ type: 'pointerup', x: 350, y: 200, time: null, price: 2700.0 });
+
+  const drawings = drawingsApi.getDrawings();
+  assert.equal(drawings.length, 1);
+  const rect = drawings[0];
+  assert.equal(rect.type, 'rect');
+  assert.equal(rect.t1, 1000);
+  // Last bar time is 1300 at x=125 (idx 1). Step is 75px per 300s span.
+  // x=350 is (350 - 125) / 75 = 3 bars ahead -> 1300 + 3 * 300 = 2200.
+  assert.equal(rect.t2, 2200);
+  assert.ok(rect.t2 > candles[1].time, 'rect must extend past last candle');
+
+  drawingsApi.destroy();
+});

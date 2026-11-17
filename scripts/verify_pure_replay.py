@@ -1071,6 +1071,47 @@ def main() -> int:
             long_pos_check,
         )
 
+        # Immediate handle reachability and dragging right after placement
+        pos_handle_check = page.js(
+            "(() => {"
+            "  const canvasApi = window.SmcDebug.replay.getCanvasApi();"
+            "  const sim = window.SmcDebug.replay.getSimulatorApi();"
+            "  const chart = window.SmcDebug.replay.getChart();"
+            "  const p = sim ? sim.getActivePosition() : null;"
+            "  if (!p) return null;"
+            "  const x1 = chart.timeToCoordinate(p.entryTime);"
+            "  const x2 = chart.timeToCoordinate(p.targetTime);"
+            "  const midX = (x1 != null && x2 != null) ? (x1 + x2) / 2 : null;"
+            "  const yTp = chart.priceToCoordinate(p.tp);"
+            "  return {"
+            "    selectionActive: canvasApi.isSelectionActive(),"
+            "    midX: midX,"
+            "    yTp: yTp,"
+            "    tp: p.tp"
+            "  };"
+            "})()"
+        )
+        check(
+            "Long position keeps selectionActive armed after cursor auto-switch",
+            pos_handle_check is not None and pos_handle_check["selectionActive"],
+            pos_handle_check,
+        )
+        if pos_handle_check and pos_handle_check.get("midX") is not None:
+            hx = cx + int(pos_handle_check["midX"])
+            hy = cy + int(pos_handle_check["yTp"])
+            cdp_drag({"x": hx, "y": hy}, {"x": hx, "y": hy - 25})
+            after_tp = page.js(
+                "(() => {"
+                "  const p = window.SmcDebug.replay.getSimulatorApi().getActivePosition();"
+                "  return p ? p.tp : null;"
+                "})()"
+            )
+            check(
+                "Position TP handle is immediately draggable right after placement",
+                after_tp is not None and after_tp != pos_handle_check["tp"],
+                {"before": pos_handle_check["tp"], "after": after_tp},
+            )
+
         # Manual Close via 'c' key (T-SIM-07)
         page.press_key("c", "KeyC", 67, "c")
         manual_close_check = page.js(
@@ -1425,6 +1466,42 @@ def main() -> int:
             "committed rectangle actually paints pixels on the overlay canvas",
             ws_paint["sampled"] > 100 and ws_paint["painted"] > 0,
             ws_paint,
+        )
+
+        # 8b3. Regression: a rectangle dragged into the right whitespace (past
+        # the newest revealed bar) must extrapolate forward and stay painted.
+        page.js("document.getElementById('tool-rect').click()")
+        geo = page.js(
+            "(() => {"
+            "  const chart = window.SmcDebug.replay.getChart();"
+            "  const ts = chart.timeScale();"
+            "  const wm = chart.getWatermark();"
+            "  return { wmX: ts.logicalToCoordinate(wm) };"
+            "})()"
+        )
+        wm_x = int(geo["wmX"])
+        cdp_drag(
+            {"x": cx + wm_x - 200, "y": cy + 180}, {"x": cx + wm_x + 80, "y": cy + 260}
+        )
+        forward_rect = page.js(
+            "(() => {"
+            "  const api = window.SmcDebug.replay.getDrawingsApi();"
+            "  const d = api.getDrawings().slice(-1)[0];"
+            "  const chart = window.SmcDebug.replay.getChart();"
+            "  const wm = chart.getWatermark();"
+            "  const candles = window.SmcDebug.replay.getPayload().candles;"
+            "  return {"
+            "    type: d ? d.type : null,"
+            "    t2: d ? d.t2 : null,"
+            "    lastBarTime: candles[wm].time,"
+            "    extendsPastLastBar: Boolean(d && d.t2 > candles[wm].time)"
+            "  };"
+            "})()"
+        )
+        check(
+            "rectangle dragged into right whitespace extrapolates time past newest candle",
+            forward_rect["type"] == "rect" and forward_rect["extendsPastLastBar"],
+            forward_rect,
         )
 
         # 8c. Full reload: drawings, positions and the paper ledger must restore.

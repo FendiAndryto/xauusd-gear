@@ -67,7 +67,40 @@
           if (ct != null && !isNaN(ct) && ct > 0) return ct;
         } catch (e) {}
       }
+      var ahead = extrapolateTime(x);
+      if (ahead != null) return ahead;
       return snapToRevealedBar(x);
+    }
+
+    // coordinateToTime() returns null to the right of the newest revealed bar.
+    // A position's targetTime is entry + 20 bars (already in that whitespace),
+    // so dragging the right handle needed a forward projection rather than a
+    // snap back onto the last candle.
+    function extrapolateTime(x) {
+      var candles = getCandles();
+      if (!Array.isArray(candles) || candles.length < 2 || x == null || isNaN(x)) return null;
+
+      var lastIdx = candles.length - 1;
+      if (chartApi && chartApi.getWatermark) {
+        var wm = chartApi.getWatermark();
+        if (wm != null && wm >= 0) lastIdx = Math.min(wm, lastIdx);
+      }
+      if (lastIdx < 1) return null;
+
+      var lastX = logicalCoord(lastIdx);
+      var prevX = logicalCoord(lastIdx - 1);
+      if (lastX == null || prevX == null) return null;
+
+      var stepPx = lastX - prevX;
+      if (!(stepPx > 0)) return null;
+
+      var barsAhead = (x - lastX) / stepPx;
+      if (!(barsAhead > 0)) return null;
+
+      var span = candles[lastIdx].time - candles[lastIdx - 1].time;
+      if (!(span > 0)) return null;
+
+      return candles[lastIdx].time + Math.round(barsAhead) * span;
     }
 
     // coordinateToTime() returns null for whitespace and data gaps. Falling back
@@ -113,7 +146,41 @@
         var exact = chartApi.timeToCoordinate(t);
         if (exact != null) return exact;
       } catch (e) {}
-      return interpolateCoord(t);
+      var interp = interpolateCoord(t);
+      if (interp != null) return interp;
+      return extrapolateCoord(t);
+    }
+
+    // A freshly placed position gets targetTime = entry + 20 bars, which is
+    // past the newest revealed bar. timeToCoordinate() returns null there, so
+    // the box was drawn with the +180px fallback but findPositionAt() skipped
+    // it (x2 == null) — the R:R handles could not be grabbed at all right after
+    // placing. Project forward from the last bar instead.
+    function extrapolateCoord(t) {
+      var candles = getCandles();
+      if (!Array.isArray(candles) || candles.length < 2) return null;
+
+      var lastIdx = candles.length - 1;
+      if (chartApi && chartApi.getWatermark) {
+        var wm = chartApi.getWatermark();
+        if (wm != null && wm >= 0) lastIdx = Math.min(wm, lastIdx);
+      }
+      if (lastIdx < 1) return null;
+
+      var lastBar = candles[lastIdx];
+      if (!(t > lastBar.time)) return null;
+
+      var span = lastBar.time - candles[lastIdx - 1].time;
+      if (!(span > 0)) return null;
+
+      var lastX = logicalCoord(lastIdx);
+      var prevX = logicalCoord(lastIdx - 1);
+      if (lastX == null || prevX == null) return null;
+
+      var stepPx = lastX - prevX;
+      if (!(stepPx > 0)) return null;
+
+      return lastX + ((t - lastBar.time) / span) * stepPx;
     }
 
     // timeToCoordinate() only accepts exact bar times of the active series. A
@@ -130,6 +197,9 @@
         var mid = (lo + hi) >> 1;
         if (candles[mid].time < t) lo = mid + 1;
         else hi = mid;
+      }
+      if (candles[lo] && candles[lo].time === t) {
+        return logicalCoord(lo);
       }
       if (lo <= 0 || lo >= candles.length) return null;
 
@@ -506,27 +576,40 @@
         var maxX = Math.max(x1, x2);
         var minY = Math.min(yEntry, ySl, yTp);
         var maxY = Math.max(yEntry, ySl, yTp);
+        var midX = (minX + maxX) / 2;
+
+        // Handles are tested first and with a generous radius: they are the
+        // reason the user reaches for the box at all (R:R / TP / SL are set by
+        // dragging them), and a 12px circle is a small target next to the
+        // zone-wide horizontal bands.
+        if (Math.hypot(px - midX, py - yTp) <= 14) {
+          return { pos: pos, part: 'tp_handle' };
+        }
+        if (Math.hypot(px - midX, py - ySl) <= 14) {
+          return { pos: pos, part: 'sl_handle' };
+        }
+        if (Math.hypot(px - midX, py - yEntry) <= 14) {
+          return { pos: pos, part: 'entry_handle' };
+        }
+        var midY = (minY + maxY) / 2;
+        if (Math.hypot(px - maxX, py - midY) <= 14) {
+          return { pos: pos, part: 'right_handle' };
+        }
 
         // Check if inside box bounds
         if (px >= minX - 10 && px <= maxX + 10 && py >= minY - 10 && py <= maxY + 10) {
-          // Check specific handles
-          var midX = (minX + maxX) / 2;
-
-          // TP handle
-          if (Math.hypot(px - midX, py - yTp) <= 12 || (Math.abs(py - yTp) <= 8 && px >= minX && px <= maxX)) {
+          // A horizontal band is only claimed away from the box edges so the
+          // right-edge handle keeps priority.
+          if (Math.abs(py - yTp) <= 6 && px >= minX && px <= maxX - 8) {
             return { pos: pos, part: 'tp_handle' };
           }
-          // SL handle
-          if (Math.hypot(px - midX, py - ySl) <= 12 || (Math.abs(py - ySl) <= 8 && px >= minX && px <= maxX)) {
+          if (Math.abs(py - ySl) <= 6 && px >= minX && px <= maxX - 8) {
             return { pos: pos, part: 'sl_handle' };
           }
-          // Entry handle
-          if (Math.hypot(px - midX, py - yEntry) <= 12 || (Math.abs(py - yEntry) <= 8 && px >= minX && px <= maxX)) {
+          if (Math.abs(py - yEntry) <= 6 && px >= minX && px <= maxX - 8) {
             return { pos: pos, part: 'entry_handle' };
           }
-          // Right edge handle
-          var midY = (minY + maxY) / 2;
-          if (Math.hypot(px - maxX, py - midY) <= 12 || (Math.abs(px - maxX) <= 8 && py >= minY && py <= maxY)) {
+          if (Math.abs(px - maxX) <= 10) {
             return { pos: pos, part: 'right_handle' };
           }
           return { pos: pos, part: 'body' };

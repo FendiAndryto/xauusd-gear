@@ -64,6 +64,51 @@
       return snapToRevealedBar(x);
     }
 
+    // The chart refuses to name a time to the right of the last revealed bar:
+    // coordinateToTime() returns null in that whitespace, so dragging a shape
+    // past the newest candle snapped back onto it and the user could not size a
+    // rectangle ahead of price. Extrapolate instead, using the bar spacing that
+    // is already on screen. This is how a trader draws a zone before price gets
+    // there.
+    function extrapolateTime(x) {
+      var candles = getCandles();
+      if (!Array.isArray(candles) || candles.length < 2 || x == null || isNaN(x)) return null;
+
+      var lastIdx = candles.length - 1;
+      if (chartApi && chartApi.getWatermark) {
+        var wm = chartApi.getWatermark();
+        if (wm != null && wm >= 0) lastIdx = Math.min(wm, lastIdx);
+      }
+      if (lastIdx < 1) return null;
+
+      var lastX = logicalCoord(lastIdx);
+      var prevX = logicalCoord(lastIdx - 1);
+      if (lastX == null || prevX == null) return null;
+
+      var stepPx = lastX - prevX;
+      if (!(stepPx > 0)) return null;
+
+      var barsAhead = (x - lastX) / stepPx;
+      if (!(barsAhead > 0)) return null;
+
+      var span = candles[lastIdx].time - candles[lastIdx - 1].time;
+      if (!(span > 0)) return null;
+
+      // Round to a whole bar so the anchor lands on a bar boundary rather than
+      // an arbitrary fractional timestamp.
+      return candles[lastIdx].time + Math.round(barsAhead) * span;
+    }
+
+    // resolveTime() for the right-hand edge of a drag. coordinateToTime() wins
+    // while the pointer is still over revealed bars; past the newest bar we
+    // extrapolate forward instead of collapsing onto the last bar.
+    function resolveEdgeTime(time, x) {
+      if (time != null && !isNaN(time) && time > 0) return time;
+      var ahead = extrapolateTime(x);
+      if (ahead != null) return ahead;
+      return snapToRevealedBar(x);
+    }
+
     // coordinateToTime() returns null for whitespace (before the first revealed
     // bar / after the last one) and for data gaps (weekends, session breaks).
     // The old fallback used the month's last bar, which is off-screen at replay
@@ -106,7 +151,37 @@
         var exact = chartApi.timeToCoordinate(t);
         if (exact != null) return exact;
       } catch (e) {}
-      return interpolateCoord(t);
+      return interpolateCoord(t) != null ? interpolateCoord(t) : extrapolateCoord(t);
+    }
+
+    // timeToCoordinate() returns null for times past the newest revealed bar, so
+    // a rectangle drawn ahead of price would render with a null right edge and
+    // disappear. Project forward from the last bar using the on-screen spacing.
+    function extrapolateCoord(t) {
+      var candles = getCandles();
+      if (!Array.isArray(candles) || candles.length < 2) return null;
+
+      var lastIdx = candles.length - 1;
+      if (chartApi && chartApi.getWatermark) {
+        var wm = chartApi.getWatermark();
+        if (wm != null && wm >= 0) lastIdx = Math.min(wm, lastIdx);
+      }
+      if (lastIdx < 1) return null;
+
+      var lastBar = candles[lastIdx];
+      if (!(t > lastBar.time)) return null;
+
+      var span = lastBar.time - candles[lastIdx - 1].time;
+      if (!(span > 0)) return null;
+
+      var lastX = logicalCoord(lastIdx);
+      var prevX = logicalCoord(lastIdx - 1);
+      if (lastX == null || prevX == null) return null;
+
+      var stepPx = lastX - prevX;
+      if (!(stepPx > 0)) return null;
+
+      return lastX + ((t - lastBar.time) / span) * stepPx;
     }
 
     // timeToCoordinate() only accepts exact bar times of the *active* series.
@@ -125,6 +200,9 @@
         var mid = (lo + hi) >> 1;
         if (candles[mid].time < t) lo = mid + 1;
         else hi = mid;
+      }
+      if (candles[lo] && candles[lo].time === t) {
+        return logicalCoord(lo);
       }
       if (lo <= 0 || lo >= candles.length) return null;
 
@@ -155,6 +233,16 @@
       if (!chartApi || !chartApi.priceToCoordinate || p == null || isNaN(p)) return null;
       try {
         return chartApi.priceToCoordinate(p);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function coordinateToPrice(y) {
+      if (!chartApi || !chartApi.coordinateToPrice || y == null || isNaN(y)) return null;
+      try {
+        var p = chartApi.coordinateToPrice(y);
+        return (p == null || isNaN(p)) ? null : p;
       } catch (e) {
         return null;
       }
@@ -369,7 +457,8 @@
         if (draft) {
           draft.x2 = x;
           draft.y2 = y;
-          if (t != null) draft.t2 = t;
+          var tEdge = resolveEdgeTime(time, x);
+          if (tEdge != null) draft.t2 = tEdge;
           if (price != null && !isNaN(price)) draft.p2 = price;
           canvasApi.requestRedraw();
         }
@@ -388,8 +477,8 @@
     }
 
     function commitRectDraft(d, x2, y2, t2, p2) {
-      var tStart = Math.min(resolveTime(d.t1, d.x1), resolveTime(t2, x2));
-      var tEnd = Math.max(resolveTime(d.t1, d.x1), resolveTime(t2, x2));
+      var tStart = Math.min(resolveTime(d.t1, d.x1), resolveEdgeTime(t2, x2));
+      var tEnd = Math.max(resolveTime(d.t1, d.x1), resolveEdgeTime(t2, x2));
       var pLow = Math.min(d.p1, p2);
       var pHigh = Math.max(d.p1, p2);
 
@@ -442,7 +531,8 @@
         if (draft) {
           draft.x2 = x;
           draft.y2 = y;
-          if (t != null) draft.t2 = t;
+          var tEdge = resolveEdgeTime(time, x);
+          if (tEdge != null) draft.t2 = tEdge;
           if (price != null && !isNaN(price)) draft.p2 = price;
           canvasApi.requestRedraw();
         }
@@ -467,7 +557,7 @@
           type: 'trendline',
           t1: resolveTime(d.t1, d.x1),
           p1: Number(d.p1.toFixed(3)),
-          t2: resolveTime(t2, x2),
+          t2: resolveEdgeTime(t2, x2),
           p2: Number(p2.toFixed(3)),
           color: '#38bdf8',
           lineWidth: 1.5,
@@ -686,7 +776,8 @@
             startX: x,
             startY: y,
             startTime: time,
-            startPrice: price,
+            startEdge: resolveEdgeTime(time, x),
+            startPrice: price != null ? price : coordinateToPrice(y),
             orig: clone(item)
           };
           return;
@@ -700,7 +791,8 @@
             startX: x,
             startY: y,
             startTime: time,
-            startPrice: price,
+            startEdge: resolveEdgeTime(time, x),
+            startPrice: price != null ? price : coordinateToPrice(y),
             orig: clone(item)
           };
           return;
@@ -727,12 +819,26 @@
       var orig = state.orig;
       if (!item || !orig) return;
 
-      var dt = (time != null && state.startTime != null) ? (time - state.startTime) : 0;
-      var dp = (price != null && state.startPrice != null) ? (price - state.startPrice) : 0;
+      // In the whitespace past the newest bar the payload carries no time, so
+      // resolve the pointer column ourselves (extrapolating forward when it is
+      // beyond the last revealed bar). Without this a right-edge handle could
+      // never be dragged further right than the current candle.
+      var effTime = resolveEdgeTime(time, x);
+      var effPrice = price;
+      if (effPrice == null && chartApi && chartApi.coordinateToPrice && y != null) {
+        try {
+          effPrice = chartApi.coordinateToPrice(y);
+        } catch (e) {
+          effPrice = null;
+        }
+      }
+
+      var dt = (effTime != null && state.startEdge != null) ? (effTime - state.startEdge) : 0;
+      var dp = (effPrice != null && state.startPrice != null) ? (effPrice - state.startPrice) : 0;
 
       if (state.mode === 'move') {
         if (item.type === 'hline') {
-          if (price != null && !isNaN(price)) {
+          if (effPrice != null && !isNaN(effPrice)) {
             item.price = Number((orig.price + dp).toFixed(3));
           }
         } else if (item.type === 'rect') {
@@ -749,16 +855,16 @@
       } else if (state.mode === 'handle') {
         var hId = state.handleId;
         if (item.type === 'hline') {
-          if (price != null && !isNaN(price)) {
-            item.price = Number(price.toFixed(3));
+          if (effPrice != null && !isNaN(effPrice)) {
+            item.price = Number(effPrice.toFixed(3));
           }
         } else if (item.type === 'trendline') {
           if (hId === 'p1') {
-            if (time != null) item.t1 = time;
-            if (price != null && !isNaN(price)) item.p1 = Number(price.toFixed(3));
+            if (effTime != null) item.t1 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p1 = Number(effPrice.toFixed(3));
           } else if (hId === 'p2') {
-            if (time != null) item.t2 = time;
-            if (price != null && !isNaN(price)) item.p2 = Number(price.toFixed(3));
+            if (effTime != null) item.t2 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p2 = Number(effPrice.toFixed(3));
           }
         } else if (item.type === 'rect') {
           var tMin = Math.min(orig.t1, orig.t2);
@@ -767,25 +873,25 @@
           var pLow = Math.min(orig.p1, orig.p2);
 
           if (hId === 'tl') {
-            if (time != null) item.t1 = time;
-            if (price != null && !isNaN(price)) item.p1 = Number(price.toFixed(3));
+            if (effTime != null) item.t1 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p1 = Number(effPrice.toFixed(3));
           } else if (hId === 'tr') {
-            if (time != null) item.t2 = time;
-            if (price != null && !isNaN(price)) item.p1 = Number(price.toFixed(3));
+            if (effTime != null) item.t2 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p1 = Number(effPrice.toFixed(3));
           } else if (hId === 'br') {
-            if (time != null) item.t2 = time;
-            if (price != null && !isNaN(price)) item.p2 = Number(price.toFixed(3));
+            if (effTime != null) item.t2 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p2 = Number(effPrice.toFixed(3));
           } else if (hId === 'bl') {
-            if (time != null) item.t1 = time;
-            if (price != null && !isNaN(price)) item.p2 = Number(price.toFixed(3));
+            if (effTime != null) item.t1 = effTime;
+            if (effPrice != null && !isNaN(effPrice)) item.p2 = Number(effPrice.toFixed(3));
           } else if (hId === 'tc') {
-            if (price != null && !isNaN(price)) item.p1 = Number(price.toFixed(3));
+            if (effPrice != null && !isNaN(effPrice)) item.p1 = Number(effPrice.toFixed(3));
           } else if (hId === 'bc') {
-            if (price != null && !isNaN(price)) item.p2 = Number(price.toFixed(3));
+            if (effPrice != null && !isNaN(effPrice)) item.p2 = Number(effPrice.toFixed(3));
           } else if (hId === 'ml') {
-            if (time != null) item.t1 = time;
+            if (effTime != null) item.t1 = effTime;
           } else if (hId === 'mr') {
-            if (time != null) item.t2 = time;
+            if (effTime != null) item.t2 = effTime;
           }
         }
       }

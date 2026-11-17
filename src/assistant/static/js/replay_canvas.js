@@ -58,7 +58,15 @@
       if (activeTool === toolName) return;
 
       activeTool = toolName;
-      selectionActive = false;
+      // Selection is owned by the drawing and simulator modules: their
+      // toolChange listener deselects whenever a non-cursor tool is picked.
+      // Clearing it unconditionally here broke the post-commit flow, because
+      // onCommit() switches back to 'cursor' immediately after a shape or
+      // position is placed — that disarmed the overlay (pointer-events: none)
+      // and made the freshly drawn position impossible to grab or re-size.
+      if (toolName !== 'cursor') {
+        selectionActive = false;
+      }
       updateCanvasPointerEvents();
 
       for (var i = 0; i < toolChangeListeners.length; i += 1) {

@@ -160,3 +160,28 @@ test('selection active enables pointer events in cursor mode and emits pointer e
   assert.equal(canvas.classList.contains('is-selecting'), false);
   api.destroy();
 });
+
+test('setTool(cursor) retains selectionActive if armed; other tools reset it', () => {
+  const canvas = mockElement('canvas');
+  const container = mockElement('div');
+  const api = SmcReplayCanvas.init({ canvas, container });
+
+  api.setTool('rect');
+  assert.equal(api.getActiveTool(), 'rect');
+
+  api.setSelectionActive(true);
+  assert.equal(api.isSelectionActive(), true);
+
+  // Switching back to cursor (as happens on commit) must NOT disarm selectionActive
+  api.setTool('cursor');
+  assert.equal(api.getActiveTool(), 'cursor');
+  assert.equal(api.isSelectionActive(), true, 'cursor switch must keep selectionActive armed');
+  assert.equal(canvas.style.pointerEvents, 'auto');
+
+  // Switching to a drawing tool must reset selectionActive
+  api.setTool('hline');
+  assert.equal(api.getActiveTool(), 'hline');
+  assert.equal(api.isSelectionActive(), false, 'non-cursor tool must reset selectionActive');
+  assert.equal(canvas.style.pointerEvents, 'auto'); // active drawing tool has pointer-events: auto
+  api.destroy();
+});
